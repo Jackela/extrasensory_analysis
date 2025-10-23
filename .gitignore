@@ -1,0 +1,75 @@
+# Project-specific data directories
+/ExtraSensory.per_uuid_features_labels
+/infodynamics-dist-1.6.1
+/References
+
+# Assistant and tooling metadata
+/.claude/
+/.codex/
+/.specify/
+
+# Data files
+data/**/*.csv
+data/**/*.pkl
+data/**/*.parquet
+archive/**
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Results (optional - uncomment if you want to track generated outputs)
+# results/
+/jidt
+/docs/Proposal
