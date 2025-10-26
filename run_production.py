@@ -6,15 +6,15 @@ Features:
 - k_selected_by_user.csv (AIS k-selection tracking)
 - hbin_counts.csv (configurable hour bins, typically 6 or 24)
 - status.json (continuous heartbeat with ETA)
-- errors.log (real-time error logging)
+- pipeline.log (structured logging with proper levels)
 - CTE hour_bins from config, low_n_hours preserved
 """
-import sys, json, logging, glob, gc, yaml, subprocess, time
+import sys, json, logging, glob, gc, yaml, subprocess, time, traceback
 from pathlib import Path
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
+from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, MofNCompleteColumn
 
 sys.path.insert(0, str(Path.cwd()))
 
@@ -24,26 +24,26 @@ from src.k_selection import select_k_via_ais
 
 # Setup logging to both file and console
 def setup_logging(out_dir):
-    """Configure logging to errors.log and console."""
-    log_file = out_dir / 'errors.log'
+    """Configure logging to pipeline.log and console with proper levels."""
+    log_file = out_dir / 'pipeline.log'
     
     # Create formatters
     file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
     console_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
     
-    # File handler
+    # File handler (capture DEBUG and above)
     file_handler = logging.FileHandler(log_file, mode='w')
-    file_handler.setLevel(logging.WARNING)
+    file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(file_formatter)
     
-    # Console handler
+    # Console handler (INFO and above)
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.WARNING)
+    console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(console_formatter)
     
     # Root logger
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.WARNING)
+    root_logger.setLevel(logging.DEBUG)
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
     
@@ -75,7 +75,7 @@ class ProductionPipeline:
             if not self.out_dir.exists():
                 raise ValueError(f"Resume directory does not exist: {resume_dir}")
             self.is_resume = True
-            logger.warning(f"RESUME MODE: Continuing from {self.out_dir}")
+            logger.info(f"RESUME MODE: Continuing from {self.out_dir}")
         else:
             ts = datetime.now().strftime('%Y%m%d_%H%M')
             out_base = self.config['out_dir'].replace('<STAMP>', ts)
@@ -93,6 +93,8 @@ class ProductionPipeline:
         self.users_completed = 0
         self.total_users = 0
         self.completed_combinations = set()  # Track (user_id, feature_mode) combinations
+        self.uuid_map = {}  # Map full UUID to short ID
+        self.current_stage = None  # Track current processing stage
     
     def get_git_info(self):
         """Get git commit hash and status."""
@@ -128,7 +130,7 @@ class ProductionPipeline:
         for key, fpath in checkpoint_files.items():
             if fpath.exists():
                 df = pd.read_csv(fpath)
-                logger.warning(f"CHECKPOINT: Loaded {len(df)} rows from {fpath.name}")
+                logger.info(f"CHECKPOINT: Loaded {len(df)} rows from {fpath.name}")
                 
                 # Track completed (user_id, feature_mode) combinations
                 if 'user_id' in df.columns and 'feature_mode' in df.columns:
@@ -141,7 +143,7 @@ class ProductionPipeline:
                         for mode in self.config.get('feature_modes', ['composite']):
                             self.completed_combinations.add((row['user_id'], mode))
         
-        logger.warning(f"CHECKPOINT: {len(self.completed_combinations)} combinations already completed")
+        logger.info(f"CHECKPOINT: {len(self.completed_combinations)} combinations already completed")
         return len(self.completed_combinations)
     
     def save_checkpoint(self, method, data):
@@ -201,8 +203,8 @@ class ProductionPipeline:
         
         logger.info(f"run_info.yaml written: git={git_info['commit']}, JIDT={jidt_info['version']}")
     
-    def update_heartbeat(self, current_user=None):
-        """Update status.json with progress and ETA."""
+    def update_heartbeat(self, current_user=None, current_stage=None):
+        """Update status.json with progress, ETA, and sub-task details."""
         elapsed = (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
         
         if self.users_completed > 0:
@@ -211,22 +213,44 @@ class ProductionPipeline:
             eta_seconds = avg_time_per_user * remaining_users
             eta_time = datetime.now() + timedelta(seconds=eta_seconds)
             eta_str = eta_time.strftime('%Y-%m-%d %H:%M:%S')
+            throughput = (self.users_completed / elapsed) * 3600 if elapsed > 0 else 0
         else:
             eta_str = 'calculating...'
+            avg_time_per_user = 0
+            throughput = 0
+        
+        # Shorten current_user UUID
+        short_user = None
+        if current_user:
+            parts = current_user.split('/')
+            short_uuid = parts[0][:8] if len(parts[0]) > 8 else parts[0]
+            short_user = f"{short_uuid}/{parts[1]}" if len(parts) > 1 else short_uuid
         
         status = {
             'status': 'running',
             'timestamp': datetime.now().isoformat(),
-            'progress': {
-                'done': self.users_completed,
-                'total': self.total_users,
-                'percent': round(100 * self.users_completed / self.total_users, 1) if self.total_users > 0 else 0
+            'pipeline': {
+                'total_users': self.total_users,
+                'completed_users': self.users_completed,
+                'failed_users': len([e for e in self.errors if e.get('method') == 'PROCESS']),
+                'progress_percent': round(100 * self.users_completed / self.total_users, 1) if self.total_users > 0 else 0
             },
-            'current_user': current_user,
-            'elapsed_seconds': int(elapsed),
-            'elapsed_formatted': str(timedelta(seconds=int(elapsed))),
-            'eta': eta_str,
-            'errors_count': len(self.errors)
+            'current_task': {
+                'user_id': short_user,
+                'stage': current_stage or 'processing'
+            } if current_user else None,
+            'performance': {
+                'elapsed_seconds': int(elapsed),
+                'elapsed_formatted': str(timedelta(seconds=int(elapsed))),
+                'eta_seconds': int(eta_seconds) if self.users_completed > 0 else None,
+                'eta_time': eta_str,
+                'throughput_users_per_hour': round(throughput, 2),
+                'avg_time_per_user': round(avg_time_per_user, 2)
+            },
+            'errors': {
+                'count': len(self.errors),
+                'last_error': self.errors[-1] if self.errors else None
+            }
         }
         
         with open(self.out_dir / 'status.json', 'w') as f:
@@ -290,11 +314,19 @@ class ProductionPipeline:
                 self.save_checkpoint('k_selected', k_result)
                 
                 cap_msg = f" (capped from {k_info['k_original']})" if k_info.get('capped') else ""
-                logger.info(f"{user_id}: AIS selected k={k_selected}{cap_msg}")
+                short_id = self.uuid_map.get(user_id, user_id[:8])
+                logger.info(f"{short_id} | K_SELECT | k={k_selected}{cap_msg}")
                 return k_selected
             except Exception as e:
-                logger.error(f"{user_id}: AIS k-selection failed: {e}")
-                self.errors.append({'user_id': user_id, 'method': 'K_SELECTION', 'error': str(e)[:200]})
+                short_id = self.uuid_map.get(user_id, user_id[:8])
+                logger.error(f"{short_id} | K_SELECT | FAIL | {e}")
+                self.errors.append({
+                    'user_id': user_id, 
+                    'method': 'K_SELECTION', 
+                    'error': str(e),
+                    'traceback': traceback.format_exc(),
+                    'timestamp': datetime.now().isoformat()
+                })
                 return 4  # Fallback
         else:
             # Fixed k from config
@@ -302,32 +334,46 @@ class ProductionPipeline:
     
     def process_user(self, user_id, feature_mode):
         """Process single user-feature combination."""
+        # Create short UUID mapping
+        short_id = user_id[:8]
+        self.uuid_map[user_id] = short_id
+        
         # Check if already completed (resume mode)
         if (user_id, feature_mode) in self.completed_combinations:
-            logger.warning(f"SKIP {user_id}/{feature_mode} (already completed)")
+            logger.info(f"{short_id} | SKIP | mode={feature_mode} (already completed)")
             return
         
         try:
             start_time = datetime.now()
-            logger.warning(f"START {user_id}/{feature_mode} at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"{short_id} | START | mode={feature_mode}")
+            
             # Load data
+            self.current_stage = 'loading'
+            self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage='loading')
             raw = preprocessing.load_subject_data(user_id)
             hour_bins = self.config['hour_bins']
             A, S, H_raw, H_binned = preprocessing.create_variables(raw, feature_mode=feature_mode, hour_bins=hour_bins)
-            logger.warning(f"LOADED {user_id}/{feature_mode}: {len(A)} samples")
+            logger.info(f"{short_id} | LOADED | mode={feature_mode} samples={len(A)}")
             
             if len(A) == 0:
-                self.errors.append({'user_id': user_id, 'feature_mode': feature_mode, 'error': 'empty_data'})
+                logger.warning(f"{short_id} | EMPTY_DATA | mode={feature_mode}")
+                self.errors.append({
+                    'user_id': user_id, 
+                    'feature_mode': feature_mode, 
+                    'error': 'empty_data',
+                    'timestamp': datetime.now().isoformat()
+                })
                 return
             
             base_A, base_S = int(np.max(A)) + 1, int(np.max(S)) + 1
             base_H = int(np.max(H_binned)) + 1
-            logger.warning(f"BASES {user_id}: A={base_A}, S={base_S}, H_binned={base_H}")
+            logger.debug(f"{short_id} | BASES | A={base_A} S={base_S} H={base_H}")
             
             # Select k (only once per user, reuse for all modes)
-            logger.warning(f"K-SELECT START {user_id}")
+            self.current_stage = 'k_selection'
+            self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage='k_selection')
             k = l = self.select_k(S, base_S, user_id, H_raw=H_raw)
-            logger.warning(f"K-SELECT DONE {user_id}: k={k}")
+            logger.info(f"{short_id} | K_SELECT | k={k}")
             
             # Compute hour bin counts (using H_binned)
             self.compute_hbin_counts(H_binned, user_id, feature_mode)
@@ -339,11 +385,16 @@ class ProductionPipeline:
             
             # TE
             num_surrogates = self.config.get('surrogates', 1000)
-            for tau in self.config['taus']:
+            for idx, tau in enumerate(self.config['taus'], 1):
                 try:
-                    logger.warning(f"TE tau={tau} START {user_id}/{feature_mode}")
+                    self.current_stage = f'TE ({idx}/{len(self.config["taus"])})'
+                    self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage=self.current_stage)
+                    
+                    te_start = datetime.now()
+                    logger.info(f"{short_id} | TE | tau={tau} start")
                     te = analysis.run_te_analysis(A.astype(int), S.astype(int), k, l, base_A, base_S, tau=tau, num_surrogates=num_surrogates)
-                    logger.warning(f"TE tau={tau} DONE {user_id}/{feature_mode}")
+                    te_elapsed = (datetime.now() - te_start).total_seconds()
+                    logger.info(f"{short_id} | TE | tau={tau} done elapsed={te_elapsed:.2f}s")
                     
                     te_result = {
                         'user_id': user_id, 'feature_mode': feature_mode, 'k': k, 'l': l, 'tau': tau,
@@ -357,14 +408,28 @@ class ProductionPipeline:
                     self.save_checkpoint('te', te_result)
                     gc.collect()
                 except Exception as e:
-                    self.errors.append({'user_id': user_id, 'feature_mode': feature_mode, 'method': 'TE', 'tau': tau, 'error': str(e)[:200]})
+                    logger.error(f"{short_id} | TE | tau={tau} FAIL | {e}")
+                    self.errors.append({
+                        'user_id': user_id, 
+                        'feature_mode': feature_mode, 
+                        'method': 'TE', 
+                        'tau': tau, 
+                        'error': str(e),
+                        'traceback': traceback.format_exc(),
+                        'timestamp': datetime.now().isoformat()
+                    })
             
             # CTE
-            for tau in self.config['taus']:
+            for idx, tau in enumerate(self.config['taus'], 1):
                 try:
-                    logger.warning(f"CTE tau={tau} START {user_id}/{feature_mode}")
+                    self.current_stage = f'CTE ({idx}/{len(self.config["taus"])})'
+                    self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage=self.current_stage)
+                    
+                    cte_start = datetime.now()
+                    logger.info(f"{short_id} | CTE | tau={tau} start")
                     cte = analysis.run_cte_analysis(A.astype(int), S.astype(int), H_binned, k, l, base_A, base_S, self.config['hour_bins'], tau=tau, num_surrogates=num_surrogates)
-                    logger.warning(f"CTE tau={tau} DONE {user_id}/{feature_mode}")
+                    cte_elapsed = (datetime.now() - cte_start).total_seconds()
+                    logger.info(f"{short_id} | CTE | tau={tau} done elapsed={cte_elapsed:.2f}s")
                     
                     cte_result = {
                         'user_id': user_id, 'feature_mode': feature_mode, 'k': k, 'l': l, 'tau': tau,
@@ -381,14 +446,28 @@ class ProductionPipeline:
                     self.save_checkpoint('cte', cte_result)
                     gc.collect()
                 except Exception as e:
-                    self.errors.append({'user_id': user_id, 'feature_mode': feature_mode, 'method': 'CTE', 'tau': tau, 'error': str(e)[:200]})
+                    logger.error(f"{short_id} | CTE | tau={tau} FAIL | {e}")
+                    self.errors.append({
+                        'user_id': user_id, 
+                        'feature_mode': feature_mode, 
+                        'method': 'CTE', 
+                        'tau': tau, 
+                        'error': str(e),
+                        'traceback': traceback.format_exc(),
+                        'timestamp': datetime.now().isoformat()
+                    })
             
             # STE
-            for tau in self.config['taus']:
+            for idx, tau in enumerate(self.config['taus'], 1):
                 try:
-                    logger.warning(f"STE tau={tau} START {user_id}/{feature_mode}")
+                    self.current_stage = f'STE ({idx}/{len(self.config["taus"])})'
+                    self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage=self.current_stage)
+                    
+                    ste_start = datetime.now()
+                    logger.info(f"{short_id} | STE | tau={tau} start")
                     ste = symbolic_te.run_symbolic_te_analysis(A, S, k, k, tau=tau, num_surrogates=num_surrogates)
-                    logger.warning(f"STE tau={tau} DONE {user_id}/{feature_mode}")
+                    ste_elapsed = (datetime.now() - ste_start).total_seconds()
+                    logger.info(f"{short_id} | STE | tau={tau} done elapsed={ste_elapsed:.2f}s")
                     
                     ste_result = {
                         'user_id': user_id, 'feature_mode': feature_mode, 'k': k, 'tau': tau,
@@ -402,13 +481,27 @@ class ProductionPipeline:
                     self.save_checkpoint('ste', ste_result)
                     gc.collect()
                 except Exception as e:
-                    self.errors.append({'user_id': user_id, 'feature_mode': feature_mode, 'method': 'STE', 'tau': tau, 'error': str(e)[:200]})
+                    logger.error(f"{short_id} | STE | tau={tau} FAIL | {e}")
+                    self.errors.append({
+                        'user_id': user_id, 
+                        'feature_mode': feature_mode, 
+                        'method': 'STE', 
+                        'tau': tau, 
+                        'error': str(e),
+                        'traceback': traceback.format_exc(),
+                        'timestamp': datetime.now().isoformat()
+                    })
             
             # GC
             try:
-                logger.warning(f"GC START {user_id}/{feature_mode}")
+                self.current_stage = 'GC'
+                self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage='GC')
+                
+                gc_start = datetime.now()
+                logger.info(f"{short_id} | GC | start")
                 gc_res = granger_analysis.run_granger_causality(A, S, max_lag=8)
-                logger.warning(f"GC DONE {user_id}/{feature_mode}")
+                gc_elapsed = (datetime.now() - gc_start).total_seconds()
+                logger.info(f"{short_id} | GC | done elapsed={gc_elapsed:.2f}s")
                 p_A2S = gc_res.get('gc_A_to_S_pval', np.nan)
                 p_S2A = gc_res.get('gc_S_to_A_pval', np.nan)
                 
@@ -424,11 +517,19 @@ class ProductionPipeline:
                 self.save_checkpoint('gc', gc_result)
                 gc.collect()
             except Exception as e:
-                self.errors.append({'user_id': user_id, 'feature_mode': feature_mode, 'method': 'GC', 'error': str(e)[:200]})
+                logger.error(f"{short_id} | GC | FAIL | {e}")
+                self.errors.append({
+                    'user_id': user_id, 
+                    'feature_mode': feature_mode, 
+                    'method': 'GC', 
+                    'error': str(e),
+                    'traceback': traceback.format_exc(),
+                    'timestamp': datetime.now().isoformat()
+                })
         
             end_time = datetime.now()
             elapsed = (end_time - start_time).total_seconds()
-            logger.warning(f"COMPLETED {user_id}/{feature_mode} at {end_time.strftime('%Y-%m-%d %H:%M:%S')} (elapsed: {elapsed:.1f}s / {elapsed/60:.1f}min)")
+            logger.info(f"{short_id} | DONE | mode={feature_mode} elapsed={elapsed:.1f}s ({elapsed/60:.1f}min)")
             
             # Mark combination as completed
             self.completed_combinations.add((user_id, feature_mode))
@@ -436,8 +537,16 @@ class ProductionPipeline:
         except Exception as e:
             end_time = datetime.now()
             elapsed = (end_time - start_time).total_seconds()
-            self.errors.append({'user_id': user_id, 'feature_mode': feature_mode, 'method': 'PROCESS', 'error': str(e)[:200]})
-            logger.error(f"FAILED {user_id}/{feature_mode} at {end_time.strftime('%Y-%m-%d %H:%M:%S')} (elapsed: {elapsed:.1f}s): {e}")
+            logger.error(f"{short_id} | FAIL | mode={feature_mode} elapsed={elapsed:.1f}s | {e}")
+            logger.debug(f"Full traceback:\n{traceback.format_exc()}")
+            self.errors.append({
+                'user_id': user_id, 
+                'feature_mode': feature_mode, 
+                'method': 'PROCESS', 
+                'error': str(e),
+                'traceback': traceback.format_exc(),
+                'timestamp': datetime.now().isoformat()
+            })
     
     def run(self, user_list, feature_modes):
         """Run pipeline for all users and feature modes."""
@@ -447,7 +556,7 @@ class ProductionPipeline:
         # Load checkpoint if resuming
         if self.is_resume:
             completed_count = self.load_checkpoint()
-            logger.warning(f"RESUME: Skipping {completed_count} already completed combinations")
+            logger.info(f"RESUME: Skipping {completed_count} already completed combinations")
         
         # Write initial run_info
         self.write_run_info(seed=42)
@@ -459,14 +568,26 @@ class ProductionPipeline:
             xmx=jvm_cfg.get('xmx', '16g'),
             gc_opts=jvm_cfg.get('opts', None)
         )
-        logger.warning("PRODUCTION PIPELINE: Schema v1.0 with tracking + checkpointing")
+        logger.info("PRODUCTION PIPELINE: Schema v1.0 with tracking + checkpointing")
         
-        # Process all combinations
-        for user_id in tqdm(user_list, desc='Users'):
-            for feat_mode in feature_modes:
-                self.process_user(user_id, feat_mode)
-                self.users_completed += 1
-                self.update_heartbeat(current_user=f"{user_id}/{feat_mode}")
+        # Process all combinations with Rich progress bar
+        with Progress(
+            TextColumn("[cyan]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            task = progress.add_task("[cyan]Processing users...", total=len(user_list) * len(feature_modes))
+            
+            for user_id in user_list:
+                for feat_mode in feature_modes:
+                    short_id = user_id[:8]
+                    progress.update(task, description=f"[cyan]User {short_id}/{feat_mode}")
+                    self.process_user(user_id, feat_mode)
+                    self.users_completed += 1
+                    self.update_heartbeat(current_user=f"{user_id}/{feat_mode}", current_stage='completed')
+                    progress.advance(task)
         
         # Apply FDR and save
         self.finalize()
@@ -540,7 +661,7 @@ class ProductionPipeline:
         with open(self.out_dir / 'run_info.yaml', 'w') as f:
             yaml.dump(run_info, f, default_flow_style=False, sort_keys=False)
         
-        logger.warning(f"Pipeline completed: {run_info['users_processed']} users, {len(self.errors)} errors")
+        logger.info(f"Pipeline completed: {run_info['users_processed']} users, {len(self.errors)} errors")
         
         return str(self.out_dir.resolve())
 
@@ -574,7 +695,7 @@ Examples:
     # Determine config file
     if args.config:
         config_path = args.config
-        logger.warning(f"CUSTOM CONFIG: {config_path}")
+        logger.info(f"CUSTOM CONFIG: {config_path}")
     elif args.preset:
         preset_map = {
             'smoke': 'config/presets/smoke.yaml',
@@ -586,7 +707,7 @@ Examples:
             logger.error(f"Unknown preset '{args.preset}'. Available: {list(preset_map.keys())}")
             sys.exit(1)
         config_path = preset_map[args.preset]
-        logger.warning(f"PRESET: {args.preset} → {config_path}")
+        logger.info(f"PRESET: {args.preset} → {config_path}")
     else:
         logger.error("No configuration specified. Use: python run_production.py <preset> or --config <file>")
         parser.print_help()
@@ -604,7 +725,7 @@ Examples:
     user_list = all_uuids[:n_users]
     feature_modes = pipeline.config['feature_modes']
     
-    logger.warning(f"CONFIG: {n_users} users, {len(feature_modes)} modes, k_strategy={pipeline.config['k_selection']['strategy']}")
+    logger.info(f"CONFIG: {n_users} users, {len(feature_modes)} modes, k_strategy={pipeline.config['k_selection']['strategy']}")
     
     # Apply user sharding if specified
     if args.shard:
@@ -616,7 +737,7 @@ Examples:
             # Partition users: take every Nth user starting from shard_id
             original_count = len(user_list)
             user_list = user_list[shard_id::total_shards]
-            logger.warning(f"SHARD MODE: Processing shard {shard_id}/{total_shards} ({len(user_list)}/{original_count} users)")
+            logger.info(f"SHARD MODE: Processing shard {shard_id}/{total_shards} ({len(user_list)}/{original_count} users)")
         except Exception as e:
             logger.error(f"Failed to parse --shard argument '{args.shard}': {e}")
             logger.error("Expected format: --shard ID/TOTAL (e.g., --shard 0/4)")
