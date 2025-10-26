@@ -297,14 +297,6 @@ def run_cte_analysis(series_A: np.ndarray, series_S: np.ndarray, series_cond: np
     gc.collect()
     return results
 
-# DEPRECATED: Legacy robustness check never used
-# Used deprecated settings.EMBEDDING_K_GRID and settings.EMBEDDING_TAU_VALUES
-# If needed in future, would require config parameters
-# def run_embedding_robustness_grid(series_A, series_S, k_A_optimal, k_S_optimal, base_A, base_S):
-#     """Legacy robustness check - not implemented in current pipeline"""
-#     pass
-
-
 # Optional: Add a main block for basic testing if desired
 # if __name__ == '__main__':
 #     # Example usage (requires dummy data)

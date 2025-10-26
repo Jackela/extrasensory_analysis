@@ -46,12 +46,6 @@ def ordinal_pattern_encode(series: np.ndarray, dim: int = 3, delay: int = 1) -> 
     return patterns
 
 
-# DEPRECATED: Legacy function not used - replaced by SymbolicTE adapter in jidt_adapter.py
-# def compute_ste_with_jidt(patterns_source, patterns_dest, k, base, tau=1):
-#     """Legacy function - use SymbolicTE adapter instead"""
-#     pass
-
-
 def run_symbolic_te_analysis(series_A: np.ndarray, series_S: np.ndarray,
                               k_A: int, k_S: int, tau: int = 1, num_surrogates: int = 1000) -> dict:
     """
