@@ -252,34 +252,15 @@ class ProductionPipeline:
         self.save_checkpoint('hbin_counts', hbin_result)
     
     def select_k(self, S, base_S, user_id, H_raw=None):
-        """Select k via GUARDED AIS or fixed k."""
+        """Select k via AIS or fixed k.
+        
+        AIS strategy supports optional constraints:
+        - k_max: Hard cap on k (e.g., 4 for computational feasibility)
+        - undersampling_guard: Prevent undersampled states (min 25 samples/state)
+        """
         k_strategy = self.config.get('k_selection', {}).get('strategy', 'fixed')
         
-        if k_strategy == 'GUARDED_AIS':
-            # Use GUARDED AIS with computational feasibility guards
-            from run_ais_guarded import guarded_k_selection
-            try:
-                min_samples = min([(H_raw == h).sum() for h in range(24)]) if H_raw is not None else len(S)
-                k_info = guarded_k_selection(S.astype(int), base_S, [1,2,3,4,5,6], min_samples=min_samples)
-                k_selected = k_info['k_selected']
-                
-                k_result = {
-                    'user_id': user_id,
-                    'k_selected': k_selected,
-                    'k_original': k_info['k_original'],
-                    'cte_k_capped': k_info['cte_k_capped'],
-                    'reason': k_info['reason'],
-                    'ais_values': json.dumps(k_info['ais_values'])
-                }
-                self.results['k_selected'].append(k_result)
-                self.save_checkpoint('k_selected', k_result)
-                
-                logger.info(f"{user_id}: GUARDED AIS selected k={k_selected} (original={k_info['k_original']}, {k_info['reason']})")
-                return k_selected
-            except Exception as e:
-                logger.error(f"{user_id}: GUARDED AIS failed: {e}")
-                return 4
-        elif k_strategy == 'AIS':
+        if k_strategy == 'AIS':
             try:
                 k_config = self.config['k_selection']
                 k_grid = k_config['k_grid']
