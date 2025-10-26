@@ -18,24 +18,23 @@ RESULTS_FILE = "results/extrasensory_te_results.csv"
 
 # --- ANALYSIS PARAMETERS (from Proposal) ---
 
-# Number of surrogates for permutation testing. (Proposal Req: 24)
-NUM_SURROGATES = 1000
+# DEPRECATED: Moved to YAML config['surrogates']
+# NUM_SURROGATES = 1000
 
-# Maximum history length (k) to search for when optimizing AIS. (Proposal Req: 22)
-# NOTE: This is legacy - k_selection is now configured in YAML presets/configs
-MAX_K_AIS = 4
+# DEPRECATED: Moved to YAML config['k_selection']['k_max']
+# MAX_K_AIS = 4
 
 # Minimum samples required per bin to avoid low-n warnings
 # NOTE: hour_bins is now configured in YAML presets/configs (typically 6 or 24)
 MIN_SAMPLES_PER_BIN = 30
 
-# Embedding robustness grid parameters
-EMBEDDING_K_GRID = [-1, 0, 1]  # Relative offsets from AIS-optimal k
-EMBEDDING_TAU_VALUES = [1, 2]  # Time delays to test
+# DEPRECATED: Robustness check never called - would need config if re-enabled
+# EMBEDDING_K_GRID = [-1, 0, 1]
+# EMBEDDING_TAU_VALUES = [1, 2]
 
-# Symbolic Transfer Entropy parameters
-STE_EMBEDDING_DIM = 3  # Ordinal pattern dimension
-STE_DELAY = 1  # Ordinal pattern delay
+# DEPRECATED: STE parameters - should move to config if STE analysis expanded
+# STE_EMBEDDING_DIM = 3
+# STE_DELAY = 1
 
 # --- DATA COLUMN NAMES ---
 # Explicitly define column names based on data inspection.
@@ -51,5 +50,5 @@ COL_ACC_STD_X = 'raw_acc:3d:std_x'
 COL_ACC_STD_Y = 'raw_acc:3d:std_y'
 COL_ACC_STD_Z = 'raw_acc:3d:std_z'
 
-# Feature engineering modes
-FEATURE_MODES = ['composite', 'sma_only', 'variance_only', 'magnitude_only']  # Sensitivity branches
+# DEPRECATED: Moved to YAML config['feature_modes']
+# FEATURE_MODES = ['composite', 'sma_only', 'variance_only', 'magnitude_only']

@@ -92,7 +92,7 @@ def compute_ste_with_jidt(patterns_source: np.ndarray, patterns_dest: np.ndarray
 
 
 def run_symbolic_te_analysis(series_A: np.ndarray, series_S: np.ndarray,
-                              k_A: int, k_S: int, tau: int = 1) -> dict:
+                              k_A: int, k_S: int, tau: int = 1, num_surrogates: int = 1000) -> dict:
     """
     Computes Symbolic Transfer Entropy using JIDT adapter.
     Returns harmonized Delta=A→S−S→A.
@@ -115,13 +115,17 @@ def run_symbolic_te_analysis(series_A: np.ndarray, series_S: np.ndarray,
         k_symbolic = min(2, k_A, k_S)
         
         # --- Compute STE(A -> S) ---
+        # STE algorithm constants (ordinal pattern parameters)
+        STE_ORDINAL_DIM = 3  # Ordinal pattern dimension
+        STE_ORDINAL_DELAY = 1  # Ordinal pattern delay
+        
         params_A2S = STEParams(
-            ordinal_dim=settings.STE_EMBEDDING_DIM,
-            ordinal_delay=settings.STE_DELAY,
+            ordinal_dim=STE_ORDINAL_DIM,
+            ordinal_delay=STE_ORDINAL_DELAY,
             k_source=k_symbolic,
             k_dest=k_symbolic,
             tau=tau,
-            num_surrogates=settings.NUM_SURROGATES,
+            num_surrogates=num_surrogates,
             seed=42
         )
         calc_A2S = SymbolicTE(params_A2S)
@@ -132,12 +136,12 @@ def run_symbolic_te_analysis(series_A: np.ndarray, series_S: np.ndarray,
         
         # --- Compute STE(S -> A) ---
         params_S2A = STEParams(
-            ordinal_dim=settings.STE_EMBEDDING_DIM,
-            ordinal_delay=settings.STE_DELAY,
+            ordinal_dim=STE_ORDINAL_DIM,
+            ordinal_delay=STE_ORDINAL_DELAY,
             k_source=k_symbolic,
             k_dest=k_symbolic,
             tau=tau,
-            num_surrogates=settings.NUM_SURROGATES,
+            num_surrogates=num_surrogates,
             seed=42
         )
         calc_S2A = SymbolicTE(params_S2A)

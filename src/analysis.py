@@ -150,19 +150,22 @@ def find_optimal_k_ais(series: np.ndarray, base: int, max_k: int) -> int:
 
 
 def run_te_analysis(series_A: np.ndarray, series_S: np.ndarray, 
-                    k_A: int, k_S: int, base_A: int, base_S: int, tau: int = 1) -> dict:
-    """
-    Computes TE(A->S), TE(S->A), and their p-values using JIDT adapter.
-    Uses NUM_SURROGATES from settings. Returns a dictionary with harmonized Delta=A→S−S→A.
+                    k_A: int, k_S: int, base_A: int, base_S: int, tau: int = 1, num_surrogates: int = 1000) -> dict:
+    """Computes TE(A->S), TE(S->A), and their p-values using JIDT adapter.
     
     Args:
+        series_A, series_S: Discretized time series
+        k_A, k_S: History lengths
+        base_A, base_S: Alphabet sizes
         tau: Time delay parameter (default=1)
+        num_surrogates: Number of surrogates for significance testing (default=1000)
+    
+    Returns:
+        Dictionary with harmonized Delta=A→S−S→A.
     """
     from src.jidt_adapter import DiscreteTE
     from src.params import TEParams
     import gc
-    
-    num_surrogates = settings.NUM_SURROGATES
     results = {}
     
     # --- 1. Compute TE(A -> S) ---
@@ -220,17 +223,22 @@ def run_te_analysis(series_A: np.ndarray, series_S: np.ndarray,
 
 
 def run_cte_analysis(series_A: np.ndarray, series_S: np.ndarray, series_cond: np.ndarray,
-                     k_A: int, k_S: int, base_A: int, base_S: int, base_cond: int, tau: int = 1) -> dict:
-    """
-    Computes CTE(A->S|cond) and CTE(S->A|cond) using JIDT adapter.
-    STRICT: NO k reduction, enforces k=4 and 24 bins.
-    Returns harmonized Delta=A→S−S→A.
+                     k_A: int, k_S: int, base_A: int, base_S: int, base_cond: int, tau: int = 1, num_surrogates: int = 1000) -> dict:
+    """Computes CTE(A->S|cond) and CTE(S->A|cond) using JIDT adapter.
+    
+    Args:
+        series_A, series_S, series_cond: Discretized time series (cond is hour bins)
+        k_A, k_S: History lengths
+        base_A, base_S, base_cond: Alphabet sizes
+        tau: Time delay parameter (default=1)
+        num_surrogates: Number of surrogates for significance testing (default=1000)
+    
+    Returns:
+        Dictionary with harmonized Delta=A→S−S→A.
     """
     from src.jidt_adapter import StratifiedCTE
     from src.params import CTEParams
     import gc
-    
-    num_surrogates = settings.NUM_SURROGATES
     results = {}
     results['cte_k_reduced'] = False  # NEVER reduce k
     

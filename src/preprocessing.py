@@ -90,7 +90,7 @@ def create_composite_feature(df: pd.DataFrame, mode: str = 'composite') -> np.nd
         return 0.6 * sma + 0.4 * variance
     
     else:
-        raise ValueError(f"Unknown feature mode: {mode}. Must be one of {settings.FEATURE_MODES}")
+        raise ValueError(f"Unknown feature mode: {mode}. Must be one of ['composite', 'sma_only', 'variance_only', 'magnitude_only']")
 
 
 def create_variables(df: pd.DataFrame, feature_mode: str = 'composite', hour_bins: int = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:

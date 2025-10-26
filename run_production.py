@@ -338,10 +338,11 @@ class ProductionPipeline:
             low_n_hours = [h for h, cnt in enumerate(hour_counts) if cnt < 50]
             
             # TE
+            num_surrogates = self.config.get('surrogates', 1000)
             for tau in self.config['taus']:
                 try:
                     logger.warning(f"TE tau={tau} START {user_id}/{feature_mode}")
-                    te = analysis.run_te_analysis(A.astype(int), S.astype(int), k, l, base_A, base_S, tau=tau)
+                    te = analysis.run_te_analysis(A.astype(int), S.astype(int), k, l, base_A, base_S, tau=tau, num_surrogates=num_surrogates)
                     logger.warning(f"TE tau={tau} DONE {user_id}/{feature_mode}")
                     
                     te_result = {
@@ -362,7 +363,7 @@ class ProductionPipeline:
             for tau in self.config['taus']:
                 try:
                     logger.warning(f"CTE tau={tau} START {user_id}/{feature_mode}")
-                    cte = analysis.run_cte_analysis(A.astype(int), S.astype(int), H_binned, k, l, base_A, base_S, self.config['hour_bins'], tau=tau)
+                    cte = analysis.run_cte_analysis(A.astype(int), S.astype(int), H_binned, k, l, base_A, base_S, self.config['hour_bins'], tau=tau, num_surrogates=num_surrogates)
                     logger.warning(f"CTE tau={tau} DONE {user_id}/{feature_mode}")
                     
                     cte_result = {
@@ -386,7 +387,7 @@ class ProductionPipeline:
             for tau in self.config['taus']:
                 try:
                     logger.warning(f"STE tau={tau} START {user_id}/{feature_mode}")
-                    ste = symbolic_te.run_symbolic_te_analysis(A, S, k, k, tau=tau)
+                    ste = symbolic_te.run_symbolic_te_analysis(A, S, k, k, tau=tau, num_surrogates=num_surrogates)
                     logger.warning(f"STE tau={tau} DONE {user_id}/{feature_mode}")
                     
                     ste_result = {
