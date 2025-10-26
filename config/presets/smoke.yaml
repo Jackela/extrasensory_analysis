@@ -7,6 +7,9 @@ out_dir: "analysis/out/smoke_<STAMP>"
 n_users: 2
 feature_modes: [composite]
 
+# Quality control profile
+quality_profile: "exploratory"  # Permissive for smoke test
+
 # Time delays
 taus: [1, 2]
 

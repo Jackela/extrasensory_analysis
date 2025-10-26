@@ -1,0 +1,68 @@
+# Strict quality k=4 analysis preset
+# Publication-quality analysis with rigorous statistical requirements
+# Based on balanced.yaml with enhanced quality controls
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/k4_strict_<STAMP>"
+
+# Full analysis scope
+n_users: 60
+feature_modes: [composite]  # Focus on composite for strict analysis
+
+# Quality control profile - STRICT
+quality_profile: "strict"
+
+# Time delays
+taus: [1, 2]
+
+# k-selection with quality enforcement
+k_selection:
+  strategy: "AIS"
+  k_grid: [1, 2, 3, 4]
+  k_max: 4  # Hard cap for strict analysis
+  undersampling_guard: true
+  min_samples_per_state: 50  # Strict threshold
+
+# CTE configuration (6-bin stratification)
+hour_bins: 6
+conditional_transfer_entropy:
+  hour_bins: 6
+  bin_definitions:
+    0: "00:00-04:00"
+    1: "04:00-08:00"
+    2: "08:00-12:00"
+    3: "12:00-16:00"
+    4: "16:00-20:00"
+    5: "20:00-24:00"
+  method: "STRATIFIED-CTE"
+
+# High-confidence surrogate testing
+surrogates: 2000  # Increased for strict analysis
+
+# FDR correction
+fdr:
+  families: [TE, CTE, STE, GC]
+  by_tau: true
+  alpha: 0.05
+
+# JVM configuration
+jvm:
+  xms: "8g"
+  xmx: "16g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=200"
+    - "-Djava.awt.headless=true"
+
+# Runtime settings
+runtime:
+  checkpoint: true
+  heartbeat_interval: 60
+
+schema_version: "v1.0"
+
+# Expected outcomes
+# - User retention: ~60-70% (strict filtering)
+# - High statistical power (>0.80)
+# - Publication-ready results
+# - Processing time: ~50-60 hours (single process)

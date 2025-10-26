@@ -7,6 +7,9 @@ out_dir: "analysis/out/k6_full_<STAMP>"
 n_users: 60
 feature_modes: [composite]  # Single mode for k=6 analysis
 
+# Quality control profile
+quality_profile: "balanced"  # Recommended for production
+
 # Time delays
 taus: [1, 2]
 

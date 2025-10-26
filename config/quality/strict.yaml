@@ -1,0 +1,60 @@
+# Quality Thresholds - Strict Profile
+# For rigorous scientific analysis with high statistical power requirements
+# Based on: Lizier (2014), Wibral et al. (2014), Schreiber (2000)
+
+quality_control:
+  # Global sample requirements
+  global:
+    min_total_samples: 200
+    min_bin_samples: 50
+    action: "skip"  # skip | warn | error
+  
+  # Transfer Entropy (TE) thresholds
+  te:
+    min_samples: 200
+    min_samples_per_state: 10  # Theoretical: 25-50, practical compromise: 10
+    action: "skip"
+    rationale: "TE estimation requires sufficient samples per joint state (base_A^k × base_S^(k+1))"
+  
+  # Conditional Transfer Entropy (CTE) thresholds
+  cte:
+    min_total_samples: 500
+    min_bin_samples: 100  # Per hour bin/stratum
+    max_filtered_bins: 2  # Maximum allowed low-sample bins
+    max_filtered_ratio: 0.33  # Maximum 33% bins can be filtered
+    action: "filter_bins"  # filter_bins | warn | skip
+    rationale: "CTE stratification reduces effective sample size; require higher baseline"
+  
+  # Symbolic Transfer Entropy (STE) thresholds
+  ste:
+    min_samples: 200
+    min_ordinal_patterns: 100  # After ordinal encoding
+    action: "skip"
+    rationale: "Ordinal pattern encoding creates dependency structure requiring adequate coverage"
+  
+  # Granger Causality (GC) thresholds
+  gc:
+    min_samples: 200
+    min_samples_per_lag: 50
+    action: "skip"
+    rationale: "VAR model estimation requires sufficient degrees of freedom"
+  
+  # k-selection quality control
+  k_selection:
+    min_samples_per_state: 50
+    enforce: true
+    fallback_k: 2
+    max_k_absolute: 4  # Hard cap for strict analysis
+    rationale: "Prevent undersampling in AIS estimation (base^k state space)"
+
+# Statistical rigor settings
+statistical:
+  significance_level: 0.05
+  min_power: 0.80  # Target statistical power
+  effect_size_threshold: 0.1  # Minimum detectable effect (bits)
+  
+# Documentation and reporting
+reporting:
+  log_quality_warnings: true
+  generate_quality_report: true
+  include_sample_diagnostics: true

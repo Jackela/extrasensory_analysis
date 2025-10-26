@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path.cwd()))
 from src import preprocessing, analysis, granger_analysis, symbolic_te
 from src.fdr_utils import apply_fdr_per_family_tau, compute_delta_pvalue
 from src.k_selection import select_k_via_ais
+from src.quality_control import QualityController, DataQualityError
 
 # Setup logging to both file and console
 def setup_logging(out_dir):
@@ -86,6 +87,9 @@ class ProductionPipeline:
         # Setup logging
         setup_logging(self.out_dir)
         
+        # Load quality control configuration
+        self.quality = self._load_quality_control()
+        
         # Tracking
         self.results = {'te': [], 'cte': [], 'ste': [], 'gc': [], 'k_selected': [], 'hbin_counts': []}
         self.errors = []
@@ -95,6 +99,31 @@ class ProductionPipeline:
         self.completed_combinations = set()  # Track (user_id, feature_mode) combinations
         self.uuid_map = {}  # Map full UUID to short ID
         self.current_stage = None  # Track current processing stage
+    
+    def _load_quality_control(self):
+        """Load quality control configuration from profile or inline config."""
+        quality_profile = self.config.get('quality_profile', 'balanced')
+        
+        # Try to load quality profile file
+        profile_path = Path(f'config/quality/{quality_profile}.yaml')
+        if profile_path.exists():
+            with open(profile_path) as f:
+                quality_config = yaml.safe_load(f)
+            logger.info(f"QUALITY: Loaded profile '{quality_profile}' from {profile_path}")
+        else:
+            # Use inline quality_control config or defaults
+            logger.warning(f"QUALITY: Profile '{quality_profile}' not found, using inline config")
+            quality_config = self.config
+        
+        # Allow inline overrides
+        if 'quality_control' in self.config:
+            logger.info("QUALITY: Applying inline quality_control overrides")
+            # Merge inline overrides (simple shallow merge)
+            if 'quality_control' not in quality_config:
+                quality_config['quality_control'] = {}
+            quality_config['quality_control'].update(self.config['quality_control'])
+        
+        return QualityController(quality_config)
     
     def get_git_info(self):
         """Get git commit hash and status."""

@@ -1,0 +1,60 @@
+# Quality Thresholds - Exploratory Profile
+# For exploratory data analysis and hypothesis generation
+# Minimal filtering to maximize data retention
+
+quality_control:
+  # Global sample requirements
+  global:
+    min_total_samples: 50
+    min_bin_samples: 20
+    action: "warn"  # skip | warn | error
+  
+  # Transfer Entropy (TE) thresholds
+  te:
+    min_samples: 50
+    min_samples_per_state: 3
+    action: "warn"
+    rationale: "Exploratory analysis - accept higher variance for broader coverage"
+  
+  # Conditional Transfer Entropy (CTE) thresholds
+  cte:
+    min_total_samples: 100
+    min_bin_samples: 30  # Per hour bin/stratum
+    max_filtered_bins: 8  # Very permissive
+    max_filtered_ratio: 0.75  # Up to 75% bins can be low-sample
+    action: "warn"  # Only warn, don't filter
+    rationale: "Preserve all data for exploratory patterns, flag quality issues"
+  
+  # Symbolic Transfer Entropy (STE) thresholds
+  ste:
+    min_samples: 50
+    min_ordinal_patterns: 30
+    action: "warn"
+    rationale: "STE ordinal encoding provides robustness even with small samples"
+  
+  # Granger Causality (GC) thresholds
+  gc:
+    min_samples: 50
+    min_samples_per_lag: 20
+    action: "warn"
+    rationale: "Exploratory GC analysis for pattern discovery"
+  
+  # k-selection quality control
+  k_selection:
+    min_samples_per_state: 15
+    enforce: false  # Allow violations in exploratory mode
+    fallback_k: 4
+    max_k_absolute: 6
+    rationale: "Explore full k range, document quality flags"
+
+# Statistical rigor settings
+statistical:
+  significance_level: 0.10  # More permissive for exploration
+  min_power: 0.50
+  effect_size_threshold: 0.20
+  
+# Documentation and reporting
+reporting:
+  log_quality_warnings: true
+  generate_quality_report: true
+  include_sample_diagnostics: true  # Important for exploratory work

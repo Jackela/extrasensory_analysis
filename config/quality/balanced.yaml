@@ -1,0 +1,60 @@
+# Quality Thresholds - Balanced Profile
+# Recommended for most analyses - balances statistical rigor with data retention
+# Default configuration for production pipelines
+
+quality_control:
+  # Global sample requirements
+  global:
+    min_total_samples: 100
+    min_bin_samples: 30
+    action: "warn"  # skip | warn | error
+  
+  # Transfer Entropy (TE) thresholds
+  te:
+    min_samples: 100
+    min_samples_per_state: 5
+    action: "warn"
+    rationale: "Practical balance between sample requirements and data retention"
+  
+  # Conditional Transfer Entropy (CTE) thresholds
+  cte:
+    min_total_samples: 200
+    min_bin_samples: 50  # Per hour bin/stratum
+    max_filtered_bins: 4  # Allow more flexibility
+    max_filtered_ratio: 0.50  # Maximum 50% bins can be filtered
+    action: "filter_bins"  # filter_bins | warn | skip
+    rationale: "Filter only severely undersampled bins, mark others for caution"
+  
+  # Symbolic Transfer Entropy (STE) thresholds
+  ste:
+    min_samples: 100
+    min_ordinal_patterns: 50
+    action: "warn"
+    rationale: "STE more robust to small samples due to ordinal encoding"
+  
+  # Granger Causality (GC) thresholds
+  gc:
+    min_samples: 100
+    min_samples_per_lag: 30
+    action: "warn"
+    rationale: "VAR estimation with reasonable degrees of freedom"
+  
+  # k-selection quality control
+  k_selection:
+    min_samples_per_state: 25
+    enforce: true
+    fallback_k: 3
+    max_k_absolute: 6
+    rationale: "Balance between model complexity and sample adequacy"
+
+# Statistical rigor settings
+statistical:
+  significance_level: 0.05
+  min_power: 0.70
+  effect_size_threshold: 0.15
+  
+# Documentation and reporting
+reporting:
+  log_quality_warnings: true
+  generate_quality_report: true
+  include_sample_diagnostics: false
