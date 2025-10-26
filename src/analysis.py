@@ -297,97 +297,12 @@ def run_cte_analysis(series_A: np.ndarray, series_S: np.ndarray, series_cond: np
     gc.collect()
     return results
 
-def run_embedding_robustness_grid(series_A: np.ndarray, series_S: np.ndarray,
-                                   k_A_optimal: int, k_S_optimal: int,
-                                   base_A: int, base_S: int) -> dict:
-    """
-    Tests TE robustness across ±1 embedding parameter grid.
-    
-    Varies k_A, k_S around optimal values and tests τ ∈ {1, 2}.
-    
-    Args:
-        series_A: Activity time series
-        series_S: Sitting time series
-        k_A_optimal: AIS-optimal k for A
-        k_S_optimal: AIS-optimal k for S
-        base_A: Alphabet size for A
-        base_S: Alphabet size for S
-        
-    Returns:
-        Dictionary with grid results and sign consistency metrics
-    """
-    results = {
-        'grid_results': [],
-        'grid_sign_consistency': 0.0,
-        'grid_median_Delta_TE': np.nan
-    }
-    
-    try:
-        classes = get_jidt_classes()
-        TECalculator = classes["TE"]
-        common_base = max(base_A, base_S)
-        
-        delta_te_values = []
-        
-        # Test grid: k ∈ {optimal-1, optimal, optimal+1}, τ ∈ {1, 2}
-        for k_offset in settings.EMBEDDING_K_GRID:
-            k_A = max(1, k_A_optimal + k_offset)
-            k_S = max(1, k_S_optimal + k_offset)
-            
-            for tau in settings.EMBEDDING_TAU_VALUES:
-                try:
-                    # Subsample series by τ
-                    if tau > 1:
-                        series_A_tau = series_A[::tau]
-                        series_S_tau = series_S[::tau]
-                    else:
-                        series_A_tau = series_A
-                        series_S_tau = series_S
-                    
-                    if len(series_A_tau) < 50:
-                        continue
-                    
-                    # TE(A -> S)
-                    calc_AS = TECalculator(common_base, k_S, k_A)
-                    calc_AS.initialise()
-                    calc_AS.addObservations(java_array_int(series_A_tau), java_array_int(series_S_tau))
-                    te_AS = calc_AS.computeAverageLocalOfObservations()
-                    
-                    # TE(S -> A)
-                    calc_SA = TECalculator(common_base, k_A, k_S)
-                    calc_SA.initialise()
-                    calc_SA.addObservations(java_array_int(series_S_tau), java_array_int(series_A_tau))
-                    te_SA = calc_SA.computeAverageLocalOfObservations()
-                    
-                    if np.isfinite(te_AS) and np.isfinite(te_SA):
-                        delta_te = te_AS - te_SA
-                        delta_te_values.append(delta_te)
-                        
-                        results['grid_results'].append({
-                            'k_A': k_A,
-                            'k_S': k_S,
-                            'tau': tau,
-                            'Delta_TE': delta_te
-                        })
-                        
-                except Exception as e:
-                    logger.debug(f"Grid point (k_A={k_A}, k_S={k_S}, tau={tau}) failed: {e}")
-                    continue
-        
-        # Compute sign consistency
-        if delta_te_values:
-            delta_arr = np.array(delta_te_values)
-            # Consistency = fraction with same sign as median
-            median_sign = np.sign(np.median(delta_arr))
-            if median_sign != 0:
-                consistency = np.mean(np.sign(delta_arr) == median_sign)
-                results['grid_sign_consistency'] = float(consistency)
-            results['grid_median_Delta_TE'] = float(np.median(delta_arr))
-        
-    except Exception as e:
-        logger.error(f"Embedding robustness grid failed: {e}")
-    
-    return results
+# DEPRECATED: Legacy robustness check never used
+# Used deprecated settings.EMBEDDING_K_GRID and settings.EMBEDDING_TAU_VALUES
+# If needed in future, would require config parameters
+# def run_embedding_robustness_grid(series_A, series_S, k_A_optimal, k_S_optimal, base_A, base_S):
+#     """Legacy robustness check - not implemented in current pipeline"""
+#     pass
 
 
 # Optional: Add a main block for basic testing if desired

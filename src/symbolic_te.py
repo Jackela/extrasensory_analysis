@@ -4,7 +4,6 @@
 import logging
 import numpy as np
 from itertools import permutations
-import src.settings as settings
 
 logger = logging.getLogger(__name__)
 
@@ -47,48 +46,10 @@ def ordinal_pattern_encode(series: np.ndarray, dim: int = 3, delay: int = 1) -> 
     return patterns
 
 
-def compute_ste_with_jidt(patterns_source: np.ndarray, patterns_dest: np.ndarray,
-                           k: int, base: int, tau: int = 1) -> tuple[float, float]:
-    """
-    Computes Symbolic Transfer Entropy using JIDT on ordinal patterns.
-    
-    Args:
-        patterns_source: Ordinal pattern sequence (source)
-        patterns_dest: Ordinal pattern sequence (destination)
-        k: History length
-        base: Alphabet size (dim! for ordinal patterns)
-        tau: Time delay parameter (default=1)
-        
-    Returns:
-        (STE value, p-value)
-    """
-    try:
-        # Import JIDT classes
-        import src.analysis as analysis
-        analysis.start_jvm()
-        classes = analysis.get_jidt_classes()
-        TECalculator = classes["TE"]
-        
-        # Convert to Java arrays
-        java_source = analysis.java_array_int(patterns_source)
-        java_dest = analysis.java_array_int(patterns_dest)
-        
-        # Calculate TE on symbolic sequences with tau parameter
-        calc = TECalculator(base, k, k, 1, tau)  # (base, k_dest, k_source, delay_dest, delay_source)
-        calc.initialise()
-        calc.addObservations(java_source, java_dest)
-        ste = calc.computeAverageLocalOfObservations()
-        
-        # Compute significance
-        measure_dist = calc.computeSignificance(settings.NUM_SURROGATES)
-        p_val = measure_dist.pValue
-        
-        return (float(ste) if np.isfinite(ste) else np.nan,
-                float(p_val) if np.isfinite(p_val) else np.nan)
-        
-    except Exception as e:
-        logger.error(f"STE calculation failed: {e}")
-        return (np.nan, np.nan)
+# DEPRECATED: Legacy function not used - replaced by SymbolicTE adapter in jidt_adapter.py
+# def compute_ste_with_jidt(patterns_source, patterns_dest, k, base, tau=1):
+#     """Legacy function - use SymbolicTE adapter instead"""
+#     pass
 
 
 def run_symbolic_te_analysis(series_A: np.ndarray, series_S: np.ndarray,
