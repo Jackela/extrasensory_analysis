@@ -740,6 +740,21 @@ class ProductionPipeline:
         with open(self.out_dir / 'run_info.yaml', 'w') as f:
             yaml.dump(run_info, f, default_flow_style=False, sort_keys=False)
         
+        # Generate quality report if enabled
+        if self.quality.generate_report:
+            try:
+                quality_profile = self.config.get('quality_profile', 'balanced')
+                report_results = {
+                    'profile': quality_profile,
+                    'te': self.results['te'],
+                    'cte': self.results['cte'],
+                    'ste': self.results['ste'],
+                    'gc': self.results['gc']
+                }
+                self.quality.generate_quality_report(report_results, self.out_dir)
+            except Exception as e:
+                logger.warning(f"Failed to generate quality report: {e}")
+        
         logger.info(f"Pipeline completed: {run_info['users_processed']} users, {len(self.errors)} errors")
         
         return str(self.out_dir.resolve())
