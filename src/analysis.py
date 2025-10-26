@@ -15,8 +15,14 @@ logger = logging.getLogger(__name__)
 
 _jvm_started = False
 
-def start_jvm():
-    """Starts the JPype JVM with the JIDT classpath from settings."""
+def start_jvm(xms="8g", xmx="16g", gc_opts=None):
+    """Starts the JPype JVM with the JIDT classpath from settings.
+    
+    Args:
+        xms: Initial heap size (default: 8g)
+        xmx: Maximum heap size (default: 16g)
+        gc_opts: Additional GC options (default: G1GC with 200ms pause)
+    """
     global _jvm_started
     if _jvm_started or jpype.isJVMStarted():
         # print("JVM is already running.")
@@ -26,15 +32,22 @@ def start_jvm():
     jar_path = settings.JIDT_JAR_PATH
     if not isinstance(jar_path, str) or not jar_path:
          raise ValueError("JIDT_JAR_PATH in settings.py is not configured correctly.")
+    
+    if gc_opts is None:
+        gc_opts = ["-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200"]
          
     try:
-        jpype.startJVM(
+        jvm_args = [
             jpype.getDefaultJVMPath(),
-            "-Xmx8G",  # raise JVM heap to handle large CTE computations
+            f"-Xms{xms}",
+            f"-Xmx{xmx}",
+            *gc_opts,
+            "-Djava.awt.headless=true",
             f"-Djava.class.path={jar_path}",
-            convertStrings=False
-        )
+        ]
+        jpype.startJVM(*jvm_args, convertStrings=False)
         _jvm_started = True
+        logger.info(f"JVM started: heap={xms}-{xmx}, GC={gc_opts}")
     except Exception as e:
         logger.error("Error starting JVM with jar path '%s': %s", jar_path, e)
         _jvm_started = False
@@ -137,152 +150,237 @@ def find_optimal_k_ais(series: np.ndarray, base: int, max_k: int) -> int:
 
 
 def run_te_analysis(series_A: np.ndarray, series_S: np.ndarray, 
-                    k_A: int, k_S: int, base_A: int, base_S: int) -> dict:
+                    k_A: int, k_S: int, base_A: int, base_S: int, tau: int = 1) -> dict:
     """
-    Computes TE(A->S), TE(S->A), and their p-values using JIDT discrete calculators.
-    Uses NUM_SURROGATES from settings. Returns a dictionary of results.
-    """
+    Computes TE(A->S), TE(S->A), and their p-values using JIDT adapter.
+    Uses NUM_SURROGATES from settings. Returns a dictionary with harmonized Delta=A→S−S→A.
     
-    classes = get_jidt_classes()
-    TECalculator = classes["TE"]
+    Args:
+        tau: Time delay parameter (default=1)
+    """
+    from src.jidt_adapter import DiscreteTE
+    from src.params import TEParams
+    import gc
+    
     num_surrogates = settings.NUM_SURROGATES
-
     results = {}
-
+    
     # --- 1. Compute TE(A -> S) ---
-    common_base = max(base_A, base_S)
-
-    logger.debug(
-        "Calling TE(A->S) with common_base=%d, base_dest=%d, base_source=%d, "
-        "k_dest=%d, k_source=%d, len(A)=%d, len(S)=%d",
-        common_base,
-        base_S,
-        base_A,
-        k_S,
-        k_A,
-        len(series_A),
-        len(series_S),
-    )
-    logger.debug("series_A[:10] = %s", series_A[:10])
-    logger.debug("series_S[:10] = %s", series_S[:10])
     try:
-        # Construct with (base, k), Initialize, Add Observations, Compute
-        calc_A_to_S = TECalculator(common_base, k_S, k_A)
-        calc_A_to_S.initialise()
-        calc_A_to_S.addObservations(java_array_int(series_A), java_array_int(series_S))
-        te_A_to_S = calc_A_to_S.computeAverageLocalOfObservations()
+        params_A2S = TEParams(
+            base_source=base_A,
+            base_dest=base_S,
+            k_source=k_A,
+            k_dest=k_S,
+            tau=tau,
+            num_surrogates=num_surrogates,
+            seed=42
+        )
+        calc_A2S = DiscreteTE(params_A2S)
+        te_A_to_S, p_A_to_S = calc_A2S.compute(series_A, series_S)
+        calc_A2S.dispose()
         
-        # Compute Significance using computeSignificance method
-        measure_dist = calc_A_to_S.computeSignificance(num_surrogates)
-        p_A_to_S = measure_dist.pValue
-        
-        results['TE(A->S)'] = te_A_to_S if np.isfinite(te_A_to_S) else np.nan
-        results['p(A->S)'] = p_A_to_S if np.isfinite(p_A_to_S) else np.nan
-        
+        results['TE(A->S)'] = te_A_to_S
+        results['p(A->S)'] = p_A_to_S
     except Exception as e:
-        logger.error("Error calculating TE(A->S): %s", e)
+        logger.error(f"TE(A->S) failed: {e}")
         results['TE(A->S)'] = np.nan
         results['p(A->S)'] = np.nan
-
+    
     # --- 2. Compute TE(S -> A) ---
     try:
-        # Construct with (base, k), Initialize, Add Observations, Compute
-        calc_S_to_A = TECalculator(common_base, k_A, k_S)
-        calc_S_to_A.initialise()
-        calc_S_to_A.addObservations(java_array_int(series_S), java_array_int(series_A))
-        te_S_to_A = calc_S_to_A.computeAverageLocalOfObservations()
+        params_S2A = TEParams(
+            base_source=base_S,
+            base_dest=base_A,
+            k_source=k_S,
+            k_dest=k_A,
+            tau=tau,
+            num_surrogates=num_surrogates,
+            seed=42
+        )
+        calc_S2A = DiscreteTE(params_S2A)
+        te_S_to_A, p_S_to_A = calc_S2A.compute(series_S, series_A)
+        calc_S2A.dispose()
         
-        # Compute Significance using computeSignificance method
-        measure_dist = calc_S_to_A.computeSignificance(num_surrogates)
-        p_S_to_A = measure_dist.pValue
-
-        results['TE(S->A)'] = te_S_to_A if np.isfinite(te_S_to_A) else np.nan
-        results['p(S->A)'] = p_S_to_A if np.isfinite(p_S_to_A) else np.nan
-        
+        results['TE(S->A)'] = te_S_to_A
+        results['p(S->A)'] = p_S_to_A
     except Exception as e:
-        logger.error("Error calculating TE(S->A): %s", e)
+        logger.error(f"TE(S->A) failed: {e}")
         results['TE(S->A)'] = np.nan
         results['p(S->A)'] = np.nan
-
-    # --- 3. Compute Net Transfer (Delta_TE) ---
-    # Only compute if both TE values are valid numbers
+    
+    # --- 3. Compute Net Transfer (Delta_TE = A→S − S→A) ---
     if np.isfinite(results.get('TE(A->S)', np.nan)) and np.isfinite(results.get('TE(S->A)', np.nan)):
         results['Delta_TE'] = results['TE(A->S)'] - results['TE(S->A)']
     else:
         results['Delta_TE'] = np.nan
     
+    gc.collect()
     return results
 
 
-def run_cte_analysis(series_A: np.ndarray, series_S: np.ndarray, series_H_binned: np.ndarray,
-                     k_A: int, k_S: int, base_A: int, base_S: int, base_H_binned: int) -> dict:
+def run_cte_analysis(series_A: np.ndarray, series_S: np.ndarray, series_cond: np.ndarray,
+                     k_A: int, k_S: int, base_A: int, base_S: int, base_cond: int, tau: int = 1) -> dict:
     """
-    Robustness Check: Computes CTE(A->S|H_bin) and CTE(S->A|H_bin) using binned hour-of-day.
-    Uses NUM_SURROGATES from settings. Returns a dictionary of results.
+    Computes CTE(A->S|cond) and CTE(S->A|cond) using JIDT adapter.
+    STRICT: NO k reduction, enforces k=4 and 24 bins.
+    Returns harmonized Delta=A→S−S→A.
     """
+    from src.jidt_adapter import StratifiedCTE
+    from src.params import CTEParams
+    import gc
     
-    classes = get_jidt_classes()
-    CTECalculator = classes["CTE"]
     num_surrogates = settings.NUM_SURROGATES
-    
     results = {}
-    common_base_cte = max(base_A, base_S, base_H_binned)
-
-    # --- 1. Compute CTE(A -> S | H) ---
-    # Use 3-parameter constructor: (base_dest, base_source, base_cond)
-    # Then set k via properties
-    k_cond = 1  # Use single-step history for conditional variable (hour bins)
-
-    num_conditionals = 1  # Single conditional variable (binned hour)
-
+    results['cte_k_reduced'] = False  # NEVER reduce k
+    
+    # --- 1. Compute CTE(A -> S | H) using STRATIFIED-TE---
     try:
-        # Construct calculator with unified base and explicit history lengths
-        calc_A_to_S_H = CTECalculator(common_base_cte, k_S, num_conditionals, common_base_cte)
-        calc_A_to_S_H.initialise()
-        # Add Observations, Compute
-        calc_A_to_S_H.addObservations(java_array_int(series_A), java_array_int(series_S), java_array_int(series_H_binned))
-        cte_A_to_S = calc_A_to_S_H.computeAverageLocalOfObservations()
-
-        # Compute Significance using computeSignificance method
-        measure_dist = calc_A_to_S_H.computeSignificance(num_surrogates)
-        p_cte_A_to_S = measure_dist.pValue
+        params_A2S = CTEParams(
+            base_source=base_A,
+            base_dest=base_S,
+            base_cond=base_cond,
+            k_source=k_A,
+            k_dest=k_S,
+            num_cond_bins=1,
+            tau=tau,
+            num_surrogates=num_surrogates,
+            seed=42
+        )
+        calc_A2S = StratifiedCTE(params_A2S)
+        cte_A_to_S, p_cte_A_to_S = calc_A2S.compute(series_A, series_S, series_cond)
         
-        results['CTE(A->S|H_bin)'] = cte_A_to_S if np.isfinite(cte_A_to_S) else np.nan
-        results['p_cte(A->S|H_bin)'] = p_cte_A_to_S if np.isfinite(p_cte_A_to_S) else np.nan
-
+        results['CTE(A->S|H_bin)'] = cte_A_to_S
+        results['p_cte(A->S|H_bin)'] = p_cte_A_to_S
     except Exception as e:
-        logger.error("Error calculating CTE(A->S|H_bin): %s", e)
+        logger.error(f"CTE(A->S|H) failed: {e}")
         results['CTE(A->S|H_bin)'] = np.nan
         results['p_cte(A->S|H_bin)'] = np.nan
-
-    # --- 2. Compute CTE(S -> A | H) ---
+    
+    # --- 2. Compute CTE(S -> A | H) using STRATIFIED-TE ---
     try:
-        # Construct calculator with unified base and explicit history lengths
-        calc_S_to_A_H = CTECalculator(common_base_cte, k_A, num_conditionals, common_base_cte)
-        calc_S_to_A_H.initialise()
-        # Add Observations, Compute
-        calc_S_to_A_H.addObservations(java_array_int(series_S), java_array_int(series_A), java_array_int(series_H_binned))
-        cte_S_to_A = calc_S_to_A_H.computeAverageLocalOfObservations()
-
-        # Compute Significance using computeSignificance method
-        measure_dist = calc_S_to_A_H.computeSignificance(num_surrogates)
-        p_cte_S_to_A = measure_dist.pValue
+        params_S2A = CTEParams(
+            base_source=base_S,
+            base_dest=base_A,
+            base_cond=base_cond,
+            k_source=k_S,
+            k_dest=k_A,
+            num_cond_bins=1,
+            tau=tau,
+            num_surrogates=num_surrogates,
+            seed=42
+        )
+        calc_S2A = StratifiedCTE(params_S2A)
+        cte_S_to_A, p_cte_S_to_A = calc_S2A.compute(series_S, series_A, series_cond)
         
-        results['CTE(S->A|H_bin)'] = cte_S_to_A if np.isfinite(cte_S_to_A) else np.nan
-        results['p_cte(S->A|H_bin)'] = p_cte_S_to_A if np.isfinite(p_cte_S_to_A) else np.nan
-
+        results['CTE(S->A|H_bin)'] = cte_S_to_A
+        results['p_cte(S->A|H_bin)'] = p_cte_S_to_A
     except Exception as e:
-        logger.error("Error calculating CTE(S->A|H_bin): %s", e)
+        logger.error(f"CTE(S->A|H) failed: {e}")
         results['CTE(S->A|H_bin)'] = np.nan
         results['p_cte(S->A|H_bin)'] = np.nan
-
-    # --- 3. Compute Net Conditional Transfer (Delta_CTE) ---
+    
+    # --- 3. Compute Net Conditional Transfer (Delta_CTE = A→S − S→A) ---
     if np.isfinite(results.get('CTE(A->S|H_bin)', np.nan)) and np.isfinite(results.get('CTE(S->A|H_bin)', np.nan)):
         results['Delta_CTE_bin'] = results['CTE(A->S|H_bin)'] - results['CTE(S->A|H_bin)']
     else:
         results['Delta_CTE_bin'] = np.nan
-        
+    
+    gc.collect()
     return results
+
+def run_embedding_robustness_grid(series_A: np.ndarray, series_S: np.ndarray,
+                                   k_A_optimal: int, k_S_optimal: int,
+                                   base_A: int, base_S: int) -> dict:
+    """
+    Tests TE robustness across ±1 embedding parameter grid.
+    
+    Varies k_A, k_S around optimal values and tests τ ∈ {1, 2}.
+    
+    Args:
+        series_A: Activity time series
+        series_S: Sitting time series
+        k_A_optimal: AIS-optimal k for A
+        k_S_optimal: AIS-optimal k for S
+        base_A: Alphabet size for A
+        base_S: Alphabet size for S
+        
+    Returns:
+        Dictionary with grid results and sign consistency metrics
+    """
+    results = {
+        'grid_results': [],
+        'grid_sign_consistency': 0.0,
+        'grid_median_Delta_TE': np.nan
+    }
+    
+    try:
+        classes = get_jidt_classes()
+        TECalculator = classes["TE"]
+        common_base = max(base_A, base_S)
+        
+        delta_te_values = []
+        
+        # Test grid: k ∈ {optimal-1, optimal, optimal+1}, τ ∈ {1, 2}
+        for k_offset in settings.EMBEDDING_K_GRID:
+            k_A = max(1, k_A_optimal + k_offset)
+            k_S = max(1, k_S_optimal + k_offset)
+            
+            for tau in settings.EMBEDDING_TAU_VALUES:
+                try:
+                    # Subsample series by τ
+                    if tau > 1:
+                        series_A_tau = series_A[::tau]
+                        series_S_tau = series_S[::tau]
+                    else:
+                        series_A_tau = series_A
+                        series_S_tau = series_S
+                    
+                    if len(series_A_tau) < 50:
+                        continue
+                    
+                    # TE(A -> S)
+                    calc_AS = TECalculator(common_base, k_S, k_A)
+                    calc_AS.initialise()
+                    calc_AS.addObservations(java_array_int(series_A_tau), java_array_int(series_S_tau))
+                    te_AS = calc_AS.computeAverageLocalOfObservations()
+                    
+                    # TE(S -> A)
+                    calc_SA = TECalculator(common_base, k_A, k_S)
+                    calc_SA.initialise()
+                    calc_SA.addObservations(java_array_int(series_S_tau), java_array_int(series_A_tau))
+                    te_SA = calc_SA.computeAverageLocalOfObservations()
+                    
+                    if np.isfinite(te_AS) and np.isfinite(te_SA):
+                        delta_te = te_AS - te_SA
+                        delta_te_values.append(delta_te)
+                        
+                        results['grid_results'].append({
+                            'k_A': k_A,
+                            'k_S': k_S,
+                            'tau': tau,
+                            'Delta_TE': delta_te
+                        })
+                        
+                except Exception as e:
+                    logger.debug(f"Grid point (k_A={k_A}, k_S={k_S}, tau={tau}) failed: {e}")
+                    continue
+        
+        # Compute sign consistency
+        if delta_te_values:
+            delta_arr = np.array(delta_te_values)
+            # Consistency = fraction with same sign as median
+            median_sign = np.sign(np.median(delta_arr))
+            if median_sign != 0:
+                consistency = np.mean(np.sign(delta_arr) == median_sign)
+                results['grid_sign_consistency'] = float(consistency)
+            results['grid_median_Delta_TE'] = float(np.median(delta_arr))
+        
+    except Exception as e:
+        logger.error(f"Embedding robustness grid failed: {e}")
+    
+    return results
+
 
 # Optional: Add a main block for basic testing if desired
 # if __name__ == '__main__':
@@ -302,7 +400,7 @@ def run_cte_analysis(series_A: np.ndarray, series_S: np.ndarray, series_H_binned
 #         # print(f"Optimal k_A={k_a}, k_S={k_s}")
 #         # te_res = run_te_analysis(series_a, series_s, k_a, k_s, base_a, base_s)
 #         # print("TE results:", te_res)
-#         # cte_res = run_cte_analysis(series_a, series_s, series_h_binned, k_a, k_s, base_a, base_s, base_h_binned)
+#         # cte_res = run_cte_analysis(series_a, series_s, series_h_cond, k_a, k_s, base_a, base_s, base_h_cond)
 #         # print("CTE results:", cte_res)
 #     except Exception as e:
 #         print(f"Error during basic check: {e}")

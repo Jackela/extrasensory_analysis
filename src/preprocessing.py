@@ -26,18 +26,94 @@ def load_subject_data(uuid: str) -> pd.DataFrame:
     return data
 
 
-def create_variables(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def compute_sma(df: pd.DataFrame) -> np.ndarray:
     """
-    Creates the three critical time series variables from the loaded dataframe:
-    - A: Activity Level (Based on COL_ACTIVITY_INPUT, z-scored, 5-bin quantile discretized)
-    - S: Sitting State (Based on COL_SITTING, binary)
-    - H_binned: Binned hour-of-day indicator using NUM_HOUR_BINS
+    Computes Signal Magnitude Area (SMA) from tri-axis accelerometer data.
+    SMA = (|ax| + |ay| + |az|) / 3
+    
+    Returns continuous SMA values.
+    """
+    required_cols = [settings.COL_ACC_X, settings.COL_ACC_Y, settings.COL_ACC_Z]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing tri-axis columns for SMA: {missing}")
+    
+    sma = (np.abs(df[settings.COL_ACC_X]) + 
+           np.abs(df[settings.COL_ACC_Y]) + 
+           np.abs(df[settings.COL_ACC_Z])) / 3.0
+    return sma.values
 
-    Returns aligned, non-NaN integer arrays for A, S, and H_binned.
+
+def compute_triaxis_variance(df: pd.DataFrame) -> np.ndarray:
     """
+    Computes tri-axis variance metric from std columns.
+    Variance = sqrt(std_x^2 + std_y^2 + std_z^2)
+    
+    Returns continuous variance values.
+    """
+    required_cols = [settings.COL_ACC_STD_X, settings.COL_ACC_STD_Y, settings.COL_ACC_STD_Z]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing std columns for variance: {missing}")
+    
+    variance = np.sqrt(df[settings.COL_ACC_STD_X]**2 + 
+                       df[settings.COL_ACC_STD_Y]**2 + 
+                       df[settings.COL_ACC_STD_Z]**2)
+    return variance.values
+
+
+def create_composite_feature(df: pd.DataFrame, mode: str = 'composite') -> np.ndarray:
+    """
+    Creates activity feature based on specified mode:
+    - 'composite': 0.6*SMA + 0.4*variance (weighted blend)
+    - 'sma_only': SMA only
+    - 'variance_only': Variance only
+    - 'magnitude_only': Original magnitude mean (baseline)
+    
+    Returns continuous feature values.
+    """
+    if mode == 'magnitude_only':
+        if settings.COL_ACTIVITY_INPUT not in df.columns:
+            raise ValueError(f"Missing column: {settings.COL_ACTIVITY_INPUT}")
+        return df[settings.COL_ACTIVITY_INPUT].values
+    
+    elif mode == 'sma_only':
+        return compute_sma(df)
+    
+    elif mode == 'variance_only':
+        return compute_triaxis_variance(df)
+    
+    elif mode == 'composite':
+        sma = compute_sma(df)
+        variance = compute_triaxis_variance(df)
+        # Weighted blend: 60% SMA, 40% variance
+        return 0.6 * sma + 0.4 * variance
+    
+    else:
+        raise ValueError(f"Unknown feature mode: {mode}. Must be one of {settings.FEATURE_MODES}")
+
+
+def create_variables(df: pd.DataFrame, feature_mode: str = 'composite', hour_bins: int = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Creates the core time series variables from the loaded dataframe:
+    - A: Activity Level (composite/SMA/variance/magnitude feature, z-scored, 5-bin quantile discretized)
+    - S: Sitting State (Based on COL_SITTING, binary)
+    - H_raw: Hour-of-day indicator in 24 bins (0-23)
+    - H_binned: Hour-of-day indicator using hour_bins parameter
+
+    Args:
+        df: Input dataframe with ExtraSensory features
+        feature_mode: Feature engineering mode ('composite', 'sma_only', 'variance_only', 'magnitude_only')
+        hour_bins: Number of bins for H_binned (required, must be passed from config)
+
+    Returns aligned, non-NaN integer arrays for A, S, H_raw, and H_binned.
+    """
+    
+    if hour_bins is None:
+        raise ValueError("hour_bins is required and must be passed from config file")
 
     # --- Input Validation ---
-    required_cols = [settings.COL_ACTIVITY_INPUT, settings.COL_SITTING]
+    required_cols = [settings.COL_SITTING]
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         raise ValueError(f"Missing required columns: {', '.join(missing_cols)}")
@@ -47,8 +123,8 @@ def create_variables(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarr
     # Handle potential NaNs in label column (fill with 0, assuming NaN means not sitting)
     series_S = series_S.fillna(0)
 
-    # 2. Variable A (Activity): Based on COL_ACTIVITY_INPUT (Revised definition)
-    continuous_A = df[settings.COL_ACTIVITY_INPUT].copy()
+    # 2. Variable A (Activity): Use composite feature based on mode
+    continuous_A = create_composite_feature(df, mode=feature_mode)
 
     # 3. Variable H (Hour of Day): From timestamp index
     timestamps = pd.to_datetime(df.index, unit='s')
@@ -99,9 +175,9 @@ def create_variables(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarr
 
     # 6. Get final, aligned, integer arrays
     final_S = aligned_df['S'].values.astype(int)
-    hour_bins = settings.NUM_HOUR_BINS
+    final_H_raw = aligned_df['H'].values.astype(int)
     if hour_bins < 1:
-        raise ValueError("NUM_HOUR_BINS in settings.py must be >= 1.")
+        raise ValueError(f"hour_bins must be >= 1, got {hour_bins}")
 
     bin_edges = np.linspace(0, 24, hour_bins + 1)
     series_H_binned = pd.cut(
@@ -115,6 +191,8 @@ def create_variables(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarr
     final_H_binned = series_H_binned.values.astype(int)
 
     # Ensure all arrays have the same length after processing
-    assert len(final_A) == len(final_S) == len(final_H_binned), "Array lengths do not match after processing!"
+    assert len(final_A) == len(final_S) == len(final_H_raw) == len(final_H_binned), (
+        "Array lengths do not match after processing!"
+    )
 
-    return final_A, final_S, final_H_binned
+    return final_A, final_S, final_H_raw, final_H_binned

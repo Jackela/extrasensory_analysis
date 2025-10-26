@@ -1,0 +1,70 @@
+# Proposal-aligned configuration for ExtraSensory analysis
+# Single source of truth for all parameters
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/full_bins6_<STAMP>"
+
+# Feature modes to analyze
+feature_modes:
+  - composite  # Only composite for k=6 run
+
+# Tau values for TE/CTE/STE
+taus: [1, 2]
+
+# K selection strategy
+k_selection:
+  strategy: "AIS"  # Pure AIS k-selection (max_ais, no constraints)
+  k_fixed: 4
+  k_grid: [1, 2, 3, 4, 5, 6]  # Full k range
+  k_max: null  # No hard cap (set to 4 for computational safety)
+  undersampling_guard: false  # Disabled for pure AIS (set to true for safety)
+  epsilon_bits: 0.005  # Minimal-sufficient criterion
+  reuse_for: ["TE", "CTE", "STE"]
+
+# CTE configuration
+conditional_transfer_entropy:
+  hour_bins: 6
+  bin_definitions:
+    0: "00:00-04:00"
+    1: "04:00-08:00"
+    2: "08:00-12:00"
+    3: "12:00-16:00"
+    4: "16:00-20:00"
+    5: "20:00-24:00"
+  method: "STRATIFIED-CTE"  # Data-level lag before stratification
+  
+# Legacy hour_bins for backward compatibility
+hour_bins: 6
+
+# Surrogate testing
+surrogates: 1000
+
+# FDR correction
+fdr:
+  families: ["TE", "CTE", "STE", "GC"]
+  by_tau: true  # Separate FDR per (family, tau)
+  alpha: 0.05
+
+# JVM configuration
+jvm:
+  xms: "6g"
+  xmx: "12g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=300"
+    - "-Djava.awt.headless=true"
+
+# Runtime settings
+runtime:
+  concurrency: 2  # Parallel processing (2 processes)
+  checkpoint: true  # Checkpoint per (user, method, feature, k, tau)
+  heartbeat_interval: 60  # seconds
+
+# Smoke test configuration
+smoke:
+  n_users: 2
+  feature_modes: ["composite"]
+  k_fixed: 4  # Skip AIS for speed
+
+# Output schema version
+schema_version: "v1.0"
