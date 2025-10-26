@@ -1,0 +1,55 @@
+# Fast k=4 analysis preset - GUARDED_AIS (60 users, 4 hours single-process)
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/k4_fast_<STAMP>"
+
+# Full analysis scope
+n_users: 60
+feature_modes: [composite, sma_only, variance_only, magnitude_only]
+
+# Time delays
+taus: [1, 2]
+
+# GUARDED_AIS k-selection (computational safety)
+k_selection:
+  strategy: "AIS"
+  k_grid: [1, 2, 3, 4, 5, 6]
+  k_max: 4  # Hard cap at k=4 for speed
+  undersampling_guard: true  # Enforce ≥25 samples/state
+
+# CTE configuration (6-bin stratification)
+hour_bins: 6
+conditional_transfer_entropy:
+  hour_bins: 6
+  bin_definitions:
+    0: "00:00-04:00"
+    1: "04:00-08:00"
+    2: "08:00-12:00"
+    3: "12:00-16:00"
+    4: "16:00-20:00"
+    5: "20:00-24:00"
+  method: "STRATIFIED-CTE"
+
+# Surrogate testing
+surrogates: 1000
+
+# FDR correction
+fdr:
+  families: [TE, CTE, STE, GC]
+  by_tau: true
+  alpha: 0.05
+
+# JVM configuration
+jvm:
+  xms: "4g"
+  xmx: "8g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=300"
+
+# Runtime settings
+runtime:
+  checkpoint: true
+  heartbeat_interval: 60
+
+schema_version: "v1.0"

@@ -560,36 +560,63 @@ class ProductionPipeline:
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="Production ExtraSensory analysis pipeline with checkpointing")
-    parser.add_argument('--config', default='config/proposal.yaml', help="Config file")
-    parser.add_argument('--smoke', action='store_true', help="Run smoke test (2 users)")
-    parser.add_argument('--full', action='store_true', help="Run full analysis (60 users)")
+    parser = argparse.ArgumentParser(
+        description="Production ExtraSensory analysis pipeline with preset configurations",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Preset configurations:
+  smoke      Fast validation (2 users, k=4 fixed, 100 surrogates)
+  k6_full    Pure AIS k=6 analysis (60 users, no constraints, 1000 surrogates)
+  k4_fast    GUARDED_AIS k≤4 analysis (60 users, 4 modes, fast)
+  24bin_cte  24-bin CTE high resolution (60 users, k≤4)
+
+Examples:
+  python run_production.py smoke
+  python run_production.py k6_full --shard 0/4
+  python run_production.py --config custom.yaml
+        """
+    )
+    parser.add_argument('preset', nargs='?', help="Preset name (smoke, k6_full, k4_fast, 24bin_cte)")
+    parser.add_argument('--config', help="Custom config file (overrides preset)")
     parser.add_argument('--resume', type=str, metavar='DIR', help="Resume from existing output directory")
     parser.add_argument('--shard', type=str, metavar='ID/TOTAL', help="Process shard: e.g., 0/4 means shard 0 of 4")
+    parser.add_argument('--n-users', type=int, help="Override number of users from config")
     args = parser.parse_args()
     
-    pipeline = ProductionPipeline(args.config, resume_dir=args.resume)
+    # Determine config file
+    if args.config:
+        config_path = args.config
+        logger.warning(f"CUSTOM CONFIG: {config_path}")
+    elif args.preset:
+        preset_map = {
+            'smoke': 'config/presets/smoke.yaml',
+            'k6_full': 'config/presets/k6_full.yaml',
+            'k4_fast': 'config/presets/k4_fast.yaml',
+            '24bin_cte': 'config/presets/24bin_cte.yaml'
+        }
+        if args.preset not in preset_map:
+            logger.error(f"Unknown preset '{args.preset}'. Available: {list(preset_map.keys())}")
+            sys.exit(1)
+        config_path = preset_map[args.preset]
+        logger.warning(f"PRESET: {args.preset} → {config_path}")
+    else:
+        logger.error("No configuration specified. Use: python run_production.py <preset> or --config <file>")
+        parser.print_help()
+        sys.exit(1)
+    
+    pipeline = ProductionPipeline(config_path, resume_dir=args.resume)
     
     # Get user list
     data_root = Path(pipeline.config['data_root'])
     files = glob.glob(str(data_root / '*.features_labels.csv'))
     all_uuids = sorted([Path(f).stem.replace('.features_labels', '') for f in files])
     
-    if args.smoke:
-        user_list = all_uuids[:pipeline.config['smoke']['n_users']]
-        feature_modes = pipeline.config['feature_modes']  # 使用全量4个modes
-        logger.warning(f"SMOKE MODE: {len(user_list)} users, {len(feature_modes)} modes, k_strategy={pipeline.config['k_selection']['strategy']}")
-    elif args.full:
-        user_list = all_uuids[:60]
-        feature_modes = pipeline.config['feature_modes']
-        logger.warning(f"FULL MODE: {len(user_list)} users, {len(feature_modes)} modes, k_strategy={pipeline.config['k_selection']['strategy']}")
-    else:
-        user_list = all_uuids[:2]
-        feature_modes = ['composite']
-        # Override config for default mode
-        pipeline.config['k_selection']['strategy'] = 'fixed'
-        pipeline.config['k_selection']['k_fixed'] = 4
-        logger.warning(f"DEFAULT: {len(user_list)} users, {len(feature_modes)} modes, k_fixed=4")
+    # Get n_users from config or override
+    n_users = args.n_users if args.n_users else pipeline.config.get('n_users', len(all_uuids))
+    user_list = all_uuids[:n_users]
+    feature_modes = pipeline.config['feature_modes']
+    
+    logger.warning(f"CONFIG: {n_users} users, {len(feature_modes)} modes, k_strategy={pipeline.config['k_selection']['strategy']}")
     
     # Apply user sharding if specified
     if args.shard:
@@ -612,6 +639,8 @@ def main():
     print(json.dumps({
         'status': 'completed',
         'OUT_DIR': out_dir,
+        'config': config_path,
+        'preset': args.preset if args.preset else 'custom',
         'users': len(user_list),
         'modes': len(feature_modes),
         'next_step': f'python tools/validate_outputs.py --dir {out_dir}'

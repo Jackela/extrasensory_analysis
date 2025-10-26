@@ -1,0 +1,46 @@
+# Smoke test preset - Fast validation (2 users, fixed k=4)
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/smoke_<STAMP>"
+
+# Smoke test scope
+n_users: 2
+feature_modes: [composite]
+
+# Time delays
+taus: [1, 2]
+
+# Fixed k for speed
+k_selection:
+  strategy: "fixed"
+  k_fixed: 4
+
+# CTE configuration
+hour_bins: 6
+conditional_transfer_entropy:
+  hour_bins: 6
+  method: "STRATIFIED-CTE"
+
+# Surrogate testing (reduced for speed)
+surrogates: 100
+
+# FDR correction
+fdr:
+  families: [TE, CTE, STE, GC]
+  by_tau: true
+  alpha: 0.05
+
+# JVM configuration
+jvm:
+  xms: "4g"
+  xmx: "8g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=300"
+
+# Runtime settings
+runtime:
+  checkpoint: true
+  heartbeat_interval: 60
+
+schema_version: "v1.0"

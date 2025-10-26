@@ -32,87 +32,94 @@ This project implements a comprehensive pipeline for computing:
 
 ### Installation
 
+**Quick Setup**:
 ```bash
 git clone https://github.com/yourusername/extrasensory_analysis.git
 cd extrasensory_analysis
 pip install -r requirements.txt
 ```
 
-### Data Setup
-Download the [ExtraSensory dataset](http://extrasensory.ucsd.edu/) and extract to:
-```
-data/ExtraSensory.per_uuid_features_labels/
-```
+**Complete Installation Guide**: See [INSTALLATION.md](INSTALLATION.md) for detailed setup including:
+- JIDT download and configuration
+- ExtraSensory dataset acquisition
+- Environment setup and verification
 
 ### Run Analysis
 
-**Smoke Test (2 users, ~2 minutes, validates setup)**:
+**All execution is preset-based with zero hardcoding.**
+
+**Smoke Test (2 users, k=4 fixed, ~2 minutes)**:
 ```bash
-python run_production.py --smoke
+python run_production.py smoke
 ```
 
-**Full Analysis (60 users)**:
-
-*Option 1: Parallel Execution (Recommended, 60 hours)*:
+**Full k=6 Analysis (60 users, 4-process parallel, 60 hours)**:
 ```bash
 # Linux/macOS/Git Bash
-chmod +x run_parallel_4shards.sh
-./run_parallel_4shards.sh
+./run_parallel_4shards.sh k6_full
 
 # Windows
-run_parallel_4shards.bat
+run_parallel_4shards.bat k6_full
 ```
 
-*Option 2: Single-Process (240 hours)*:
+**Fast k≤4 Analysis (60 users, 4 modes, ~4 hours)**:
 ```bash
-python run_production.py --full
+python run_production.py k4_fast
+```
+
+**Custom Configuration**:
+```bash
+python run_production.py --config path/to/custom.yaml
 ```
 
 **Resume from Checkpoint**:
 ```bash
-python run_production.py --full --shard 2/4 \
-  --resume analysis/out/full_bins6_20251026_1432
+python run_production.py k6_full --shard 2/4 \
+  --resume analysis/out/k6_full_20251026_1432
 ```
 
 **Merge Parallel Results**:
 ```bash
 python merge_shard_results.py \
-  --shards analysis/out/full_bins6_20251026_143{0,1,2,3} \
+  --shards analysis/out/k6_full_20251026_143{0,1,2,3} \
   --output analysis/out/merged_k6_full
 ```
 
-## Configuration
+## Configuration Presets
 
-All parameters are centralized in `config/proposal.yaml`:
+**Four pre-configured analysis profiles** (zero hardcoding):
 
+| Preset | Users | Modes | K | Runtime | Use Case |
+|--------|-------|-------|---|---------|----------|
+| **smoke** | 2 | 1 | k=4 (fixed) | 2 min | Fast validation |
+| **k6_full** | 60 | 1 | k≤6 (pure AIS) | 60h (parallel) | Scientific optimal |
+| **k4_fast** | 60 | 4 | k≤4 (guarded) | 4h | Fast comprehensive |
+| **24bin_cte** | 60 | 1 | k≤4 (guarded) | 5h | High temporal resolution |
+
+**Example Preset** (`config/presets/k6_full.yaml`):
 ```yaml
-# Current configuration for k=6 analysis
-hour_bins: 6  # CTE stratification (4-hour windows)
-taus: [1, 2]  # Time delays
-feature_modes: [composite]  # Activity representation
+n_users: 60
+feature_modes: [composite]
+taus: [1, 2]
 
-# Pure AIS k-selection (no constraints)
 k_selection:
   strategy: "AIS"
   k_grid: [1, 2, 3, 4, 5, 6]
-  k_max: null  # No hard cap
-  undersampling_guard: false  # Disabled
+  k_max: null  # No constraints
+  undersampling_guard: false
 
-# JVM configuration (validated for k=6)
+hour_bins: 6  # 4-hour windows
+surrogates: 1000
+
 jvm:
   xms: "6g"
-  xmx: "12g"  # Minimum for k=6 (tested)
-
-# Statistical testing
-surrogates: 1000
-fdr:
-  alpha: 0.05
-  by_tau: true  # Separate FDR per (family, tau)
+  xmx: "12g"  # Validated for k=6
 ```
 
-**Configuration Documentation**:
+**Documentation**:
+- [config/presets/README.md](config/presets/README.md) - Preset comparison and selection guide
 - [config/README.md](config/README.md) - Full parameter reference
-- [config/MIGRATION_NOTES.md](config/MIGRATION_NOTES.md) - Migration from hardcoded values
+- [config/MIGRATION_NOTES.md](config/MIGRATION_NOTES.md) - Hardcoded → preset migration
 
 ## Parallel Execution
 

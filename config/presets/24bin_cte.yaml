@@ -1,0 +1,48 @@
+# 24-bin CTE analysis preset - High temporal resolution (60 users, k≤4)
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/24bin_cte_<STAMP>"
+
+# Full analysis scope
+n_users: 60
+feature_modes: [composite]
+
+# Time delays
+taus: [1, 2]
+
+# GUARDED_AIS k-selection (24-bin requires lower k)
+k_selection:
+  strategy: "AIS"
+  k_grid: [1, 2, 3, 4]
+  k_max: 4  # Cap at k=4 for 24-bin stability
+  undersampling_guard: true
+
+# CTE configuration (24-bin high resolution)
+hour_bins: 24
+conditional_transfer_entropy:
+  hour_bins: 24
+  method: "STRATIFIED-CTE"
+
+# Surrogate testing
+surrogates: 1000
+
+# FDR correction
+fdr:
+  families: [TE, CTE, STE, GC]
+  by_tau: true
+  alpha: 0.05
+
+# JVM configuration
+jvm:
+  xms: "4g"
+  xmx: "8g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=300"
+
+# Runtime settings
+runtime:
+  checkpoint: true
+  heartbeat_interval: 60
+
+schema_version: "v1.0"

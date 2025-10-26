@@ -47,24 +47,29 @@ htmlcov/
 
 # Analysis outputs
 analysis/out/*/
-results/*.csv
-\!results/.gitkeep
+analysis/*.log
+results/*
+!results/.gitkeep
 *.log
 nul
 
 # Data (too large for git)
-data/ExtraSensory.per_uuid_features_labels/
+data/
 *.zip
 *.tar.gz
 
-# JIDT (keep jar, exclude docs if large)
-jidt/infodynamics-dist-*/demos/
-jidt/infodynamics-dist-*/javadocs/
+# JIDT (exclude all - users download from official source)
+jidt/
 
-# Temporary files
+# Temporary files and internal tools
 *.tmp
 .cleanup_plan.txt
 FINAL_COMPLIANCE_REPORT.md
+.claude/
+.codex/
+.specify/
+archive/
+docs/Proposal/
 
 # OS-specific
 Thumbs.db
