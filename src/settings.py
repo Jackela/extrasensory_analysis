@@ -22,11 +22,11 @@ RESULTS_FILE = "results/extrasensory_te_results.csv"
 NUM_SURROGATES = 1000
 
 # Maximum history length (k) to search for when optimizing AIS. (Proposal Req: 22)
-# NOTE: This is legacy - k_selection is now configured in config/proposal.yaml
+# NOTE: This is legacy - k_selection is now configured in YAML presets/configs
 MAX_K_AIS = 4
 
 # Minimum samples required per bin to avoid low-n warnings
-# NOTE: hour_bins is now configured in config/proposal.yaml (default: 6)
+# NOTE: hour_bins is now configured in YAML presets/configs (typically 6 or 24)
 MIN_SAMPLES_PER_BIN = 30
 
 # Embedding robustness grid parameters

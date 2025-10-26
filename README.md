@@ -295,7 +295,8 @@ Full analysis (60 users, 4 processes):
 ```
 extrasensory_analysis/
 ├── config/
-│   ├── proposal.yaml           # Main configuration (YAML)
+│   ├── template.yaml           # Configuration reference template
+│   ├── presets/                # Pre-configured analysis profiles
 │   ├── README.md               # Config documentation
 │   └── MIGRATION_NOTES.md      # Hardcoded → config migration
 ├── src/
@@ -327,7 +328,7 @@ extrasensory_analysis/
 **JVM Out of Memory (k=6)**:
 ```
 Error: Requested memory for base 5, k=6, l=6 is too large
-Solution: Increase heap to 12GB in config/proposal.yaml
+Solution: Use k6_full preset (includes 12GB heap) or set xmx=12g in custom config
 ```
 
 **Process Crashes**:

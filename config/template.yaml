@@ -1,5 +1,14 @@
-# Proposal-aligned configuration for ExtraSensory analysis
-# Single source of truth for all parameters
+# Configuration Template for ExtraSensory Analysis
+# 
+# This is a REFERENCE TEMPLATE with full parameter documentation.
+# DO NOT use this file directly for analysis.
+# 
+# Usage:
+#   1. Use presets: python run_production.py <smoke|k6_full|k4_fast|24bin_cte>
+#   2. Create custom config: cp config/template.yaml config/my_custom.yaml
+#      Then: python run_production.py --config config/my_custom.yaml
+# 
+# See config/presets/README.md for preset documentation
 
 data_root: "data/ExtraSensory.per_uuid_features_labels"
 out_dir: "analysis/out/full_bins6_<STAMP>"

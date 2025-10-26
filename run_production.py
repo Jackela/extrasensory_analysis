@@ -4,10 +4,10 @@
 Features:
 - run_info.yaml (JIDT version, JVM params, git commit, seed)
 - k_selected_by_user.csv (AIS k-selection tracking)
-- hbin_counts.csv (24-hour bin sample counts)
+- hbin_counts.csv (configurable hour bins, typically 6 or 24)
 - status.json (continuous heartbeat with ETA)
 - errors.log (real-time error logging)
-- CTE hour_bins=24 constant, low_n_hours preserved
+- CTE hour_bins from config, low_n_hours preserved
 """
 import sys, json, logging, glob, gc, yaml, subprocess, time
 from pathlib import Path
@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 class ProductionPipeline:
     """Production pipeline with comprehensive tracking and monitoring."""
     
-    def __init__(self, config_path='config/proposal.yaml', resume_dir=None):
+    def __init__(self, config_path, resume_dir=None):
         with open(config_path) as f:
             self.config = yaml.safe_load(f)
         
@@ -380,7 +380,7 @@ class ProductionPipeline:
                     
                     cte_result = {
                         'user_id': user_id, 'feature_mode': feature_mode, 'k': k, 'l': l, 'tau': tau,
-                        'hour_bins': self.config['hour_bins'],  # Constant 24
+                        'hour_bins': self.config['hour_bins'],  # From config (typically 6 or 24)
                         'CTE_A2S': cte.get('CTE(A->S|H_bin)'), 'CTE_S2A': cte.get('CTE(S->A|H_bin)'),
                         'Delta_CTE': cte.get('Delta_CTE_bin'), 'p_A2S': cte.get('p_cte(A->S|H_bin)'),
                         'p_S2A': cte.get('p_cte(S->A|H_bin)', np.nan), 'n_samples': len(A),

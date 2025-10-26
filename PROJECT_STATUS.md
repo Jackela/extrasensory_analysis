@@ -170,7 +170,7 @@ python tools/validate_outputs.py --dir analysis/merged
 
 ## Configuration Reference
 
-**config/proposal.yaml** (current):
+**config/template.yaml (reference) or config/presets/** (current):
 ```yaml
 hour_bins: 6
 feature_modes: [composite]

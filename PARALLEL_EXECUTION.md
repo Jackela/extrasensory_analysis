@@ -85,7 +85,7 @@ python merge_shard_results.py \
 
 ## Configuration Details
 
-### Current Setup (config/proposal.yaml)
+### Current Setup (config/template.yaml (reference) or config/presets/)
 
 ```yaml
 hour_bins: 6          # 6-bin CTE (4-hour windows)
@@ -134,7 +134,7 @@ With `--shard ID/TOTAL`, users are distributed using modulo partitioning:
 ### Process Killed/OOM
 - **Symptom**: Process exits with "Killed" message
 - **Cause**: JVM heap too small (<12GB for k=6)
-- **Solution**: Increase heap to 12GB in config/proposal.yaml
+- **Solution**: Increase heap to 12GB in config/template.yaml (reference) or config/presets/
 
 ### All Processes Slow
 - **Symptom**: All shards running but very slow

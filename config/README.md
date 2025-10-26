@@ -1,7 +1,12 @@
 # Configuration Guide
 
 ## Overview
-All analysis parameters are configured via `config/proposal.yaml`. The pipeline validates required fields on startup and raises errors for missing/invalid values.
+All analysis parameters are configured via YAML files in `config/presets/` or custom configs. The pipeline validates required fields on startup and raises errors for missing/invalid values.
+
+**See also**:
+- `config/template.yaml` - Full parameter reference with documentation
+- `config/presets/README.md` - Pre-configured analysis profiles
+- `INSTALLATION.md` - Setup and quick start guide
 
 ## Required Fields
 
@@ -110,7 +115,7 @@ NUM_HOUR_BINS = 6
 MAX_K_AIS = 4
 ```
 
-**After** (configured in `config/proposal.yaml`):
+**After** (configured in YAML preset or custom config):
 ```yaml
 hour_bins: 6
 k_selection:

@@ -24,7 +24,7 @@ Before submitting a bug report:
 
 **Config**:
 ```yaml
-# Paste relevant config/proposal.yaml sections
+# Paste relevant config/template.yaml (reference) or config/presets/ sections
 ```
 
 **Steps to Reproduce**:

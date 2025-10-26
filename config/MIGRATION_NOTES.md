@@ -8,7 +8,7 @@ Removed hardcoded configuration constants from `src/settings.py` and migrated to
 ### 1. Removed Hardcoded Constants
 **File**: `src/settings.py`
 - **Removed**: `NUM_HOUR_BINS = 6` (line 28)
-- **Replaced with**: Config parameter `hour_bins` in `config/proposal.yaml`
+- **Replaced with**: Config parameter `hour_bins` in `config/template.yaml (reference) or config/presets/`
 - **Migration**: All code now reads `hour_bins` from config, not hardcoded constant
 
 ### 2. Updated Function Signatures
