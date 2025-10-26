@@ -394,6 +394,19 @@ class ProductionPipeline:
                 })
                 return
             
+            # Global quality validation
+            try:
+                self.quality.validate_global(len(A), short_id)
+            except DataQualityError as e:
+                logger.warning(f"{short_id} | SKIP | {e}")
+                self.errors.append({
+                    'user_id': user_id,
+                    'feature_mode': feature_mode,
+                    'error': f'quality_global: {e}',
+                    'timestamp': datetime.now().isoformat()
+                })
+                return
+            
             base_A, base_S = int(np.max(A)) + 1, int(np.max(S)) + 1
             base_H = int(np.max(H_binned)) + 1
             logger.debug(f"{short_id} | BASES | A={base_A} S={base_S} H={base_H}")
@@ -407,14 +420,22 @@ class ProductionPipeline:
             # Compute hour bin counts (using H_binned)
             self.compute_hbin_counts(H_binned, user_id, feature_mode)
             
-            # Get low_n_hours for CTE (using H_binned)
+            # Validate and filter CTE hour bins
             num_bins = base_H
             hour_counts = [(H_binned == h).sum() for h in range(num_bins)]
-            low_n_hours = [h for h, cnt in enumerate(hour_counts) if cnt < 50]
+            cte_passed, valid_bins, cte_diagnostics = self.quality.validate_cte(len(A), hour_counts, short_id)
+            low_n_hours = cte_diagnostics['low_bins']
             
             # TE
             num_surrogates = self.config.get('surrogates', 1000)
             for idx, tau in enumerate(self.config['taus'], 1):
+                # Validate TE requirements
+                try:
+                    te_valid = self.quality.validate_te(len(A), short_id, base_A, base_S, k)
+                except DataQualityError as e:
+                    logger.info(f"{short_id} | TE | tau={tau} SKIP | {e}")
+                    continue
+                
                 try:
                     self.current_stage = f'TE ({idx}/{len(self.config["taus"])})'
                     self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage=self.current_stage)
@@ -429,7 +450,9 @@ class ProductionPipeline:
                         'user_id': user_id, 'feature_mode': feature_mode, 'k': k, 'l': l, 'tau': tau,
                         'TE_A2S': te.get('TE(A->S)'), 'TE_S2A': te.get('TE(S->A)'),
                         'Delta_TE': te.get('Delta_TE'), 'p_A2S': te.get('p(A->S)'),
-                        'p_S2A': te.get('p(S->A)', np.nan), 'n_samples': len(A), 'low_n': len(A) < 100
+                        'p_S2A': te.get('p(S->A)', np.nan), 'n_samples': len(A), 
+                        'low_n': len(A) < self.quality.te.min_samples,
+                        'quality_passed': te_valid
                     }
                     self.results['te'].append(te_result)
                     
@@ -449,45 +472,58 @@ class ProductionPipeline:
                     })
             
             # CTE
-            for idx, tau in enumerate(self.config['taus'], 1):
-                try:
-                    self.current_stage = f'CTE ({idx}/{len(self.config["taus"])})'
-                    self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage=self.current_stage)
-                    
-                    cte_start = datetime.now()
-                    logger.info(f"{short_id} | CTE | tau={tau} start")
-                    cte = analysis.run_cte_analysis(A.astype(int), S.astype(int), H_binned, k, l, base_A, base_S, self.config['hour_bins'], tau=tau, num_surrogates=num_surrogates)
-                    cte_elapsed = (datetime.now() - cte_start).total_seconds()
-                    logger.info(f"{short_id} | CTE | tau={tau} done elapsed={cte_elapsed:.2f}s")
-                    
-                    cte_result = {
-                        'user_id': user_id, 'feature_mode': feature_mode, 'k': k, 'l': l, 'tau': tau,
-                        'hour_bins': self.config['hour_bins'],  # From config (typically 6 or 24)
-                        'CTE_A2S': cte.get('CTE(A->S|H_bin)'), 'CTE_S2A': cte.get('CTE(S->A|H_bin)'),
-                        'Delta_CTE': cte.get('Delta_CTE_bin'), 'p_A2S': cte.get('p_cte(A->S|H_bin)'),
-                        'p_S2A': cte.get('p_cte(S->A|H_bin)', np.nan), 'n_samples': len(A),
-                        'n_samples_per_bin_min': min(hour_counts) if hour_counts else np.nan,
-                        'low_n': len(A) < 200, 'low_n_hours': json.dumps(low_n_hours)
-                    }
-                    self.results['cte'].append(cte_result)
-                    
-                    # Save checkpoint after each CTE completion
-                    self.save_checkpoint('cte', cte_result)
-                    gc.collect()
-                except Exception as e:
-                    logger.error(f"{short_id} | CTE | tau={tau} FAIL | {e}")
-                    self.errors.append({
-                        'user_id': user_id, 
-                        'feature_mode': feature_mode, 
-                        'method': 'CTE', 
-                        'tau': tau, 
-                        'error': str(e),
-                        'traceback': traceback.format_exc(),
-                        'timestamp': datetime.now().isoformat()
-                    })
+            if not cte_passed:
+                logger.warning(f"{short_id} | CTE | SKIP | quality check failed")
+            else:
+                for idx, tau in enumerate(self.config['taus'], 1):
+                    try:
+                        self.current_stage = f'CTE ({idx}/{len(self.config["taus"])})'
+                        self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage=self.current_stage)
+                        
+                        cte_start = datetime.now()
+                        logger.info(f"{short_id} | CTE | tau={tau} start bins={len(valid_bins)}/{len(hour_counts)}")
+                        cte = analysis.run_cte_analysis(A.astype(int), S.astype(int), H_binned, k, l, base_A, base_S, self.config['hour_bins'], tau=tau, num_surrogates=num_surrogates)
+                        cte_elapsed = (datetime.now() - cte_start).total_seconds()
+                        logger.info(f"{short_id} | CTE | tau={tau} done elapsed={cte_elapsed:.2f}s")
+                        
+                        cte_result = {
+                            'user_id': user_id, 'feature_mode': feature_mode, 'k': k, 'l': l, 'tau': tau,
+                            'hour_bins': self.config['hour_bins'],
+                            'CTE_A2S': cte.get('CTE(A->S|H_bin)'), 'CTE_S2A': cte.get('CTE(S->A|H_bin)'),
+                            'Delta_CTE': cte.get('Delta_CTE_bin'), 'p_A2S': cte.get('p_cte(A->S|H_bin)'),
+                            'p_S2A': cte.get('p_cte(S->A|H_bin)', np.nan), 'n_samples': len(A),
+                            'n_samples_per_bin_min': min(hour_counts) if hour_counts else np.nan,
+                            'low_n': len(A) < self.quality.cte.min_total_samples,
+                            'low_n_hours': json.dumps(low_n_hours),
+                            'bins_filtered': len(cte_diagnostics['low_bins']),
+                            'quality_passed': cte_passed
+                        }
+                        self.results['cte'].append(cte_result)
+                        
+                        # Save checkpoint after each CTE completion
+                        self.save_checkpoint('cte', cte_result)
+                        gc.collect()
+                    except Exception as e:
+                        logger.error(f"{short_id} | CTE | tau={tau} FAIL | {e}")
+                        self.errors.append({
+                            'user_id': user_id, 
+                            'feature_mode': feature_mode, 
+                            'method': 'CTE', 
+                            'tau': tau, 
+                            'error': str(e),
+                            'traceback': traceback.format_exc(),
+                            'timestamp': datetime.now().isoformat()
+                        })
             
             # STE
             for idx, tau in enumerate(self.config['taus'], 1):
+                # Validate STE requirements
+                try:
+                    ste_valid = self.quality.validate_ste(len(A), short_id)
+                except DataQualityError as e:
+                    logger.info(f"{short_id} | STE | tau={tau} SKIP | {e}")
+                    continue
+                
                 try:
                     self.current_stage = f'STE ({idx}/{len(self.config["taus"])})'
                     self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage=self.current_stage)
@@ -502,7 +538,10 @@ class ProductionPipeline:
                         'user_id': user_id, 'feature_mode': feature_mode, 'k': k, 'tau': tau,
                         'STE_A2S': ste.get('STE(A->S)'), 'STE_S2A': ste.get('STE(S->A)'),
                         'Delta_STE': ste.get('Delta_STE'), 'p_A2S': ste.get('p_ste(A->S)'),
-                        'p_S2A': ste.get('p_ste(S->A)', np.nan)
+                        'p_S2A': ste.get('p_ste(S->A)', np.nan),
+                        'n_samples': len(A),
+                        'low_n': len(A) < self.quality.ste.min_samples,
+                        'quality_passed': ste_valid
                     }
                     self.results['ste'].append(ste_result)
                     
@@ -522,32 +561,43 @@ class ProductionPipeline:
                     })
             
             # GC
+            max_lag = 8
             try:
-                self.current_stage = 'GC'
-                self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage='GC')
-                
-                gc_start = datetime.now()
-                logger.info(f"{short_id} | GC | start")
-                gc_res = granger_analysis.run_granger_causality(A, S, max_lag=8)
-                gc_elapsed = (datetime.now() - gc_start).total_seconds()
-                logger.info(f"{short_id} | GC | done elapsed={gc_elapsed:.2f}s")
-                p_A2S = gc_res.get('gc_A_to_S_pval', np.nan)
-                p_S2A = gc_res.get('gc_S_to_A_pval', np.nan)
-                
-                gc_result = {
-                    'user_id': user_id, 'feature_mode': feature_mode,
-                    'gc_optimal_lag': int(gc_res.get('gc_optimal_lag', 0)) if np.isfinite(gc_res.get('gc_optimal_lag', np.nan)) else 0,
-                    'GC_A2S_pval': p_A2S, 'GC_S2A_pval': p_S2A,
-                    'sign_GC': 'A2S' if (np.isfinite(p_A2S) and np.isfinite(p_S2A) and p_A2S < p_S2A) else 'S2A'
-                }
-                self.results['gc'].append(gc_result)
-                
-                # Save checkpoint after GC completion
-                self.save_checkpoint('gc', gc_result)
-                gc.collect()
-            except Exception as e:
-                logger.error(f"{short_id} | GC | FAIL | {e}")
-                self.errors.append({
+                gc_valid = self.quality.validate_gc(len(A), short_id, max_lag)
+            except DataQualityError as e:
+                logger.info(f"{short_id} | GC | SKIP | {e}")
+                gc_valid = False
+            
+            if gc_valid:
+                try:
+                    self.current_stage = 'GC'
+                    self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage='GC')
+                    
+                    gc_start = datetime.now()
+                    logger.info(f"{short_id} | GC | start")
+                    gc_res = granger_analysis.run_granger_causality(A, S, max_lag=max_lag)
+                    gc_elapsed = (datetime.now() - gc_start).total_seconds()
+                    logger.info(f"{short_id} | GC | done elapsed={gc_elapsed:.2f}s")
+                    p_A2S = gc_res.get('gc_A_to_S_pval', np.nan)
+                    p_S2A = gc_res.get('gc_S_to_A_pval', np.nan)
+                    
+                    gc_result = {
+                        'user_id': user_id, 'feature_mode': feature_mode,
+                        'gc_optimal_lag': int(gc_res.get('gc_optimal_lag', 0)) if np.isfinite(gc_res.get('gc_optimal_lag', np.nan)) else 0,
+                        'GC_A2S_pval': p_A2S, 'GC_S2A_pval': p_S2A,
+                        'sign_GC': 'A2S' if (np.isfinite(p_A2S) and np.isfinite(p_S2A) and p_A2S < p_S2A) else 'S2A',
+                        'n_samples': len(A),
+                        'low_n': len(A) < self.quality.gc.min_samples,
+                        'quality_passed': gc_valid
+                    }
+                    self.results['gc'].append(gc_result)
+                    
+                    # Save checkpoint after GC completion
+                    self.save_checkpoint('gc', gc_result)
+                    gc.collect()
+                except Exception as e:
+                    logger.error(f"{short_id} | GC | FAIL | {e}")
+                    self.errors.append({
                     'user_id': user_id, 
                     'feature_mode': feature_mode, 
                     'method': 'GC', 
@@ -656,11 +706,11 @@ class ProductionPipeline:
         if len(df_gc) > 0:
             df_gc = apply_fdr_per_family_tau(df_gc, ['GC_A2S_pval', 'GC_S2A_pval'], ['q_GC_A2S', 'q_GC_S2A'], 'GC', tau_col=None, alpha=alpha)
         
-        # Save with exact schema order
-        te_cols = ['user_id','feature_mode','k','l','tau','TE_A2S','TE_S2A','Delta_TE','p_A2S','p_S2A','q_A2S','q_S2A','p_Delta_TE','q_Delta_TE','n_samples','low_n']
-        cte_cols = ['user_id','feature_mode','k','l','tau','hour_bins','CTE_A2S','CTE_S2A','Delta_CTE','p_A2S','p_S2A','q_A2S','q_S2A','p_Delta_CTE','q_Delta_CTE','n_samples','n_samples_per_bin_min','low_n','low_n_hours']
-        ste_cols = ['user_id','feature_mode','k','tau','STE_A2S','STE_S2A','Delta_STE','p_A2S','p_S2A','q_A2S','q_S2A','p_Delta_STE','q_Delta_STE']
-        gc_cols = ['user_id','feature_mode','gc_optimal_lag','GC_A2S_pval','GC_S2A_pval','q_GC_A2S','q_GC_S2A','sign_GC']
+        # Save with exact schema order (including quality columns)
+        te_cols = ['user_id','feature_mode','k','l','tau','TE_A2S','TE_S2A','Delta_TE','p_A2S','p_S2A','q_A2S','q_S2A','p_Delta_TE','q_Delta_TE','n_samples','low_n','quality_passed']
+        cte_cols = ['user_id','feature_mode','k','l','tau','hour_bins','CTE_A2S','CTE_S2A','Delta_CTE','p_A2S','p_S2A','q_A2S','q_S2A','p_Delta_CTE','q_Delta_CTE','n_samples','n_samples_per_bin_min','low_n','low_n_hours','bins_filtered','quality_passed']
+        ste_cols = ['user_id','feature_mode','k','tau','STE_A2S','STE_S2A','Delta_STE','p_A2S','p_S2A','q_A2S','q_S2A','p_Delta_STE','q_Delta_STE','n_samples','low_n','quality_passed']
+        gc_cols = ['user_id','feature_mode','gc_optimal_lag','GC_A2S_pval','GC_S2A_pval','q_GC_A2S','q_GC_S2A','sign_GC','n_samples','low_n','quality_passed']
         
         df_te[te_cols].to_csv(self.out_dir / 'per_user_te.csv', index=False)
         df_cte[cte_cols].to_csv(self.out_dir / 'per_user_cte.csv', index=False)
