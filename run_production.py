@@ -242,12 +242,14 @@ class ProductionPipeline:
         for h in range(24):
             bin_counts[f'hour_{h:02d}'] = int((H_raw == h).sum())
         
-        self.results['hbin_counts'].append({
+        hbin_result = {
             'user_id': user_id,
             'feature_mode': feature_mode,
             'total_samples': len(H_raw),
             **bin_counts
-        })
+        }
+        self.results['hbin_counts'].append(hbin_result)
+        self.save_checkpoint('hbin_counts', hbin_result)
     
     def select_k(self, S, base_S, user_id, H_raw=None):
         """Select k via GUARDED AIS or fixed k."""
@@ -261,14 +263,16 @@ class ProductionPipeline:
                 k_info = guarded_k_selection(S.astype(int), base_S, [1,2,3,4,5,6], min_samples=min_samples)
                 k_selected = k_info['k_selected']
                 
-                self.results['k_selected'].append({
+                k_result = {
                     'user_id': user_id,
                     'k_selected': k_selected,
                     'k_original': k_info['k_original'],
                     'cte_k_capped': k_info['cte_k_capped'],
                     'reason': k_info['reason'],
                     'ais_values': json.dumps(k_info['ais_values'])
-                })
+                }
+                self.results['k_selected'].append(k_result)
+                self.save_checkpoint('k_selected', k_result)
                 
                 logger.info(f"{user_id}: GUARDED AIS selected k={k_selected} (original={k_info['k_original']}, {k_info['reason']})")
                 return k_selected
@@ -293,14 +297,16 @@ class ProductionPipeline:
                 )
                 k_selected = k_info['k_selected']
                 
-                self.results['k_selected'].append({
+                k_result = {
                     'user_id': user_id,
                     'k_selected': k_selected,
                     'k_original': k_info.get('k_original', k_selected),
                     'capped': k_info.get('capped', False),
                     'ais_values': json.dumps(k_info['ais_values']),
                     'criterion': k_info['criterion']
-                })
+                }
+                self.results['k_selected'].append(k_result)
+                self.save_checkpoint('k_selected', k_result)
                 
                 cap_msg = f" (capped from {k_info['k_original']})" if k_info.get('capped') else ""
                 logger.info(f"{user_id}: AIS selected k={k_selected}{cap_msg}")
