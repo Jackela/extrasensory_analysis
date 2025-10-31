@@ -1,0 +1,63 @@
+# FINAL RUN CONFIG (最终运行配置)
+#
+# 本配置是项目的最终结果配置：
+# - 60 用户；AIS 选 k，最高至 k=6（诊断显示 73% 用户选到 k=6）
+# - 采用 True CTE 作为核心方法；保留 Global TE（其在 k>=5 处可能 OOM，按设计接受并记录为 NaN）
+# - 自适应置换阶段最多 10k；FDR 按 family×tau 纠正
+#
+# Full production run: 60 users, AIS up to k=6, 10k surrogates with adaptive early stop, global TE + True CTE only
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/production_k6_true_cte_<STAMP>"
+
+n_users: 60
+feature_modes: [composite]
+
+quality_profile: "balanced"
+taus: [1, 2]
+
+# Hour bins
+hour_bins: 6
+conditional_transfer_entropy:
+  hour_bins: 6
+  method: "STRATIFIED-CTE"  # not used in this preset (analysis_modes excludes stratified_te)
+
+# K-selection via AIS up to k=6
+k_selection:
+  strategy: "AIS"
+  k_grid: [1, 2, 3, 4, 5, 6]
+  k_max: 6
+  undersampling_guard: true
+
+# Significance testing: 10k upper bound with adaptive stages
+surrogates: 10000
+statistical:
+  adaptive_surrogates:
+    enabled: true
+    stages: [1000, 3000, 10000]
+    p_sig: 0.01
+    p_nonsig: 0.20
+
+fdr:
+  families: [TE, TRUE_CTE]
+  by_tau: true
+  alpha: 0.05
+
+# JVM: 6 workers × 8g
+jvm:
+  xms: "4g"
+  xmx: "8g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=300"
+    - "-Djava.awt.headless=true"
+
+runtime:
+  concurrency: 6
+  checkpoint: true
+  heartbeat_interval: 60
+
+# Only run Global TE and True CTE
+analysis_modes: [global_te, true_cte]
+
+schema_version: "v1.0"

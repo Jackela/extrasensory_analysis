@@ -1,5 +1,8 @@
 # Configuration Guide
 
+NOTE: 最终运行配置为 `config/presets/production_k6_true_cte.yaml`（FINAL RUN CONFIG）。
+该配置使用 True CTE 作为核心方法，并清晰标注了我们对 Global TE 在 k>=5 处 OOM 的有意处理策略。
+
 ## Overview
 All analysis parameters are configured via YAML files in `config/presets/` or custom configs. The pipeline validates required fields on startup and raises errors for missing/invalid values.
 

@@ -1,0 +1,49 @@
+# AIS diagnostic preset: 2-3 users with GC and NMT enabled
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/ais_diag_<STAMP>"
+
+n_users: 3
+feature_modes: [composite]
+
+quality_profile: "balanced"
+taus: [1, 2]
+
+k_selection:
+  strategy: "AIS"
+  k_grid: [1, 2, 3, 4, 5, 6]
+  k_max: 6
+  undersampling_guard: true
+
+hour_bins: 6
+conditional_transfer_entropy:
+  hour_bins: 6
+  method: "STRATIFIED-CTE"
+
+surrogates: 1000
+
+fdr:
+  families: [TE, CTE, STE, GC]
+  by_tau: true
+  alpha: 0.05
+
+jvm:
+  xms: "12g"
+  xmx: "24g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=300"
+    - "-Djava.awt.headless=true"
+    # GC log with heap details to file under OUT_DIR
+    - "-Xlog:gc*,gc+heap=debug:file={OUT_DIR}/gc.log:time,uptime,level,tags:filecount=0"
+    # Native Memory Tracking (NMT)
+    - "-XX:+UnlockDiagnosticVMOptions"
+    - "-XX:NativeMemoryTracking=summary"
+    - "-XX:+PrintNMTStatistics"
+
+runtime:
+  concurrency: 1
+  checkpoint: true
+  heartbeat_interval: 60
+
+schema_version: "v1.0"

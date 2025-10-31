@@ -1,0 +1,3 @@
+# Keep jar file, ignore distribution directory
+infodynamics-dist-*/
+EOF < /dev/null

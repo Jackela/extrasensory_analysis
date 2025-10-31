@@ -1,0 +1,54 @@
+# AIS, k_max=6, hour_bins=6, surrogates=10000
+# Optimized for 8-core host granting 4 cores and 48 GB RAM to this job
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/ais_10k_full_<STAMP>"
+
+n_users: 60
+feature_modes: [composite]
+
+quality_profile: "balanced"
+taus: [1, 2]
+
+k_selection:
+  strategy: "AIS"
+  k_grid: [1, 2, 3, 4, 5, 6]
+  k_max: 6
+  undersampling_guard: true
+
+hour_bins: 6
+conditional_transfer_entropy:
+  hour_bins: 6
+  method: "STRATIFIED-CTE"
+
+# Heavy significance testing for final run
+surrogates: 10000
+
+fdr:
+  families: [TE, CTE, STE, GC]
+  by_tau: true
+  alpha: 0.05
+
+# Adaptive surrogates (early stop to save time)
+statistical:
+  adaptive_surrogates:
+    enabled: true
+    stages: [1000, 3000, 10000]
+    p_sig: 0.01
+    p_nonsig: 0.20
+
+# JVM: 4 workers × 12g = 48g total (fits your budget)
+jvm:
+  xms: "8g"
+  xmx: "12g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=300"
+    - "-Djava.awt.headless=true"
+
+runtime:
+  concurrency: 4
+  checkpoint: true
+  heartbeat_interval: 60
+
+schema_version: "v1.0"

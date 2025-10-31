@@ -1,0 +1,50 @@
+# Diagnostic preset: collect k-selection and QC stats only (no TE/CTE/STE/GC)
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/diagnostic_k_qc_<STAMP>"
+
+n_users: 60
+feature_modes: [composite]
+
+quality_profile: "balanced"
+taus: [1, 2]
+
+hour_bins: 6
+
+# Disable all analysis modes (diagnostic-only run)
+analysis_modes: []
+
+# Diagnostic flags
+run_diagnostics:
+  k_selection_only: true
+  qc_stats_only: true
+
+# JVM and runtime
+jvm:
+  xms: "4g"
+  xmx: "8g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=300"
+    - "-Djava.awt.headless=true"
+
+runtime:
+  concurrency: 6
+  checkpoint: false
+  heartbeat_interval: 60
+
+schema_version: "v1.0"
+
+
+k_selection:
+  strategy: "AIS"
+  k_grid: [1, 2, 3, 4, 5, 6]
+  k_max: 6
+  undersampling_guard: true
+
+surrogates: 1000
+
+fdr:
+  families: [TE, TRUE_CTE]
+  by_tau: true
+  alpha: 0.05

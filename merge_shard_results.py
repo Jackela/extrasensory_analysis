@@ -44,6 +44,7 @@ def main():
     csv_files = [
         'per_user_te.csv',
         'per_user_cte.csv',
+        'per_user_true_cte.csv',
         'per_user_ste.csv',
         'per_user_gc.csv',
         'k_selected_by_user.csv',
@@ -78,14 +79,31 @@ def main():
     for shard_dir in shard_dirs:
         status_path = shard_dir / 'status.json'
         if status_path.exists():
-            with open(status_path) as f:
-                statuses.append(json.load(f))
-    
+            try:
+                with open(status_path) as f:
+                    statuses.append(json.load(f))
+            except Exception:
+                pass
+
     if statuses:
-        total_done = sum(s['progress']['done'] for s in statuses)
-        total_users = sum(s['progress']['total'] for s in statuses)
-        total_errors = sum(s['errors_count'] for s in statuses)
-        
+        done_vals = []
+        total_vals = []
+        err_vals = []
+        for s in statuses:
+            try:
+                done_vals.append(int(s.get('progress', {}).get('done', 0)))
+                total_vals.append(int(s.get('progress', {}).get('total', 0)))
+            except Exception:
+                pass
+            try:
+                err_vals.append(int(s.get('errors_count', 0)))
+            except Exception:
+                pass
+
+        total_done = sum(done_vals)
+        total_users = sum(total_vals)
+        total_errors = sum(err_vals)
+
         merged_status = {
             'status': 'merged',
             'shards': len(statuses),
@@ -96,10 +114,10 @@ def main():
             },
             'errors_count': total_errors
         }
-        
+
         with open(out_dir / 'status.json', 'w') as f:
             json.dump(merged_status, f, indent=2)
-        
+
         print(f"✓ Merged status.json: {total_done}/{total_users} users ({merged_status['progress']['percent']}%)")
     
     print("")

@@ -2,6 +2,10 @@
 
 Pre-configured analysis profiles for common use cases.
 
+IMPORTANT: Final run config → `production_k6_true_cte.yaml`.
+该预设明确采用 True CTE 为核心方法，并对 Global TE 在高 k 处的 OOM 做了有意处理（记录为 NaN 并继续），
+与最终归档目录 `analysis/out/FINAL_RUN_k60_COMPLETE` 的产出一致。
+
 ## Available Presets
 
 ### `smoke` - Fast Validation

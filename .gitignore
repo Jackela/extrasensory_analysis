@@ -1,80 +1,58 @@
-# Python
+# OS
+.DS_Store
+Thumbs.db
+
+# Python cache and build
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+*.pyc
+*.pyo
+*.pyd
 *.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+.eggs/
+build/
+dist/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
 
-# Virtual environments
+# Environments
+.env
+.env.*
+.venv/
 venv/
-ENV/
-env/
-.venv
 
-# IDEs
+# Editors/IDEs
 .vscode/
 .idea/
+
+# Logs and temp
+*.log
+*.err
+*.tmp
+*.bak
 *.swp
 *.swo
-*~
-.DS_Store
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Analysis outputs and temp artifacts
+analysis/out/
+analysis/tmp/
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-*.cover
-.hypothesis/
+# Runtime temp/config
+config/tmp/
 
-# Analysis outputs
-analysis/out/*/
-analysis/*.log
-results/*
-!results/.gitkeep
-*.log
+# Large data dumps (adjust as needed)
+/data/
+*.parquet
+*.feather
+*.h5
+*.hdf5
+
 nul
 
-# Data (too large for git)
-data/
-*.zip
-*.tar.gz
-
-# JIDT (exclude all - users download from official source)
-jidt/
-
-# Temporary files and internal tools
-*.tmp
-.cleanup_plan.txt
-FINAL_COMPLIANCE_REPORT.md
-.claude/
-.codex/
-.specify/
-archive/
-docs/Proposal/
-
-# OS-specific
-Thumbs.db
-.DS_Store
-
-# Config overrides (keep proposal.yaml, ignore local overrides)
-config/local.yaml
-config/*.local.yaml
+/.claude
+/.codex
+/.specify
+/docs/Proposal

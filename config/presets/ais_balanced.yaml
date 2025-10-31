@@ -1,0 +1,53 @@
+# AIS-driven analysis preset (60 users) with balanced quality profile
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/ais_balanced_<STAMP>"
+
+# Scope
+n_users: 60
+feature_modes: [composite]
+
+# Quality control profile
+quality_profile: "balanced"
+
+# Time delays
+taus: [1, 2]
+
+# AIS k-selection (guarded, capped for safety)
+k_selection:
+  strategy: "AIS"
+  k_grid: [1, 2, 3, 4, 5, 6]
+  k_max: 6
+  undersampling_guard: true
+
+# CTE configuration (6-bin stratification)
+hour_bins: 6
+conditional_transfer_entropy:
+  hour_bins: 6
+  method: "STRATIFIED-CTE"
+
+# Surrogates
+surrogates: 1000
+
+# FDR correction
+fdr:
+  families: [TE, CTE, STE, GC]
+  by_tau: true
+  alpha: 0.05
+
+# JVM configuration
+jvm:
+  xms: "24g"
+  xmx: "48g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=300"
+    - "-Djava.awt.headless=true"
+
+# Runtime settings
+runtime:
+  concurrency: 1  # Single JVM process (stability), xmx=48g
+  checkpoint: true
+  heartbeat_interval: 60
+
+schema_version: "v1.0"

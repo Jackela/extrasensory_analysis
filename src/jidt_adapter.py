@@ -79,9 +79,22 @@ class DiscreteTE:
             # Compute
             te_value = self.calc.computeAverageLocalOfObservations()
             
-            # Significance
-            measure_dist = self.calc.computeSignificance(self.params.num_surrogates)
-            p_value = measure_dist.pValue
+            # Significance (adaptive or fixed)
+            p_value = np.nan
+            if self.params.adaptive_stages and len(self.params.adaptive_stages) > 0:
+                last_p = np.nan
+                for n_surr in self.params.adaptive_stages:
+                    measure_dist = self.calc.computeSignificance(int(n_surr))
+                    last_p = float(measure_dist.pValue)
+                    # Early stop if decisively significant or non-significant
+                    if self.params.early_stop_sig is not None and last_p <= self.params.early_stop_sig:
+                        break
+                    if self.params.early_stop_nonsig is not None and last_p >= self.params.early_stop_nonsig:
+                        break
+                p_value = last_p
+            else:
+                measure_dist = self.calc.computeSignificance(self.params.num_surrogates)
+                p_value = measure_dist.pValue
             
             return (float(te_value) if np.isfinite(te_value) else np.nan,
                     float(p_value) if np.isfinite(p_value) else np.nan)
@@ -98,7 +111,14 @@ class DiscreteTE:
 
 
 class StratifiedCTE:
-    """STRATIFIED-TE implementation of CTE: CTE(A→S|H) = Σ_h p(h)·TE_h(A→S)."""
+    """[已废弃] STRATIFIED-TE（Fisher 合并法）实现。
+
+    原方法基于先分箱再在各箱内计算 TE，并用 Fisher 法合并 p 值：
+    CTE(A→S|H) = Σ_h p(h)·TE_h(A→S)。
+
+    在“第 1b 阶段”验证中，我们发现该方法在 k=4 验证时与 True CTE 的结论相反，
+    因方法论不可靠已被弃用。自此，推荐并采用 compute_true_cte 作为 CTE 的核心实现。
+    """
     
     def __init__(self, params: CTEParams):
         self.params = params
@@ -135,10 +155,7 @@ class StratifiedCTE:
                 mask = (cond == h)
                 n_h = mask.sum()
                 
-                if n_h < 50:  # Minimum samples per stratum
-                    continue
-                
-                # Compute TE for this stratum
+                # Compute TE for this stratum (bins already filtered upstream)
                 source_h = source[mask]
                 dest_h = dest[mask]
                 
@@ -150,6 +167,9 @@ class StratifiedCTE:
                     k_dest=self.params.k_dest,
                     tau=1,  # Already lagged at global level
                     num_surrogates=self.params.num_surrogates,
+                    adaptive_stages=self.params.adaptive_stages,
+                    early_stop_sig=self.params.early_stop_sig,
+                    early_stop_nonsig=self.params.early_stop_nonsig,
                     seed=self.params.seed
                 )
                 
@@ -184,6 +204,80 @@ class StratifiedCTE:
         finally:
             gc.collect()
 
+
+def compute_true_cte(source: np.ndarray, dest: np.ndarray, cond: np.ndarray, params: CTEParams) -> Tuple[float, float]:
+    """Compute True Conditional Transfer Entropy using JIDT's ConditionalTransferEntropyCalculatorDiscrete.
+
+    Uses 8-arg initialise with common_base and hard-coded conditioning history k_cond=1 and k_cond_tau=1,
+    conditioning on the current hour bin only. Delay (tau) is passed to the calculator; input arrays are
+    not manually lagged.
+
+    Returns (cte_value, p_value) using fixed-num-surrogates significance unless adaptive stages are provided
+    in params (in which case the last stage p-value is returned).
+    """
+    try:
+        # Validate inputs against their native bases
+        source = validate_series(source, params.base_source, "source")
+        dest = validate_series(dest, params.base_dest, "dest")
+        cond = validate_series(cond, params.base_cond, "cond")
+
+        if not (len(source) == len(dest) == len(cond)):
+            raise ValueError(f"Length mismatch: source={len(source)}, dest={len(dest)}, cond={len(cond)}")
+
+        # Common base across variables (A base=5, S base=2, H base=6 -> common_base=6)
+        common_base = int(max(params.base_source, params.base_dest, params.base_cond))
+
+        # Construct calculator
+        CTECalc = jpype.JClass("infodynamics.measures.discrete.ConditionalTransferEntropyCalculatorDiscrete")
+        calc = CTECalc()
+
+        # JIDT Discrete CTE uses 4-arg initialise(base, history(k_dest), numOtherInfoContributors, base_others)
+        # It assumes source and conditional are taken at r-1 (i.e., tau=1). For tau>1 we apply data-level lag.
+        if int(params.tau) > 1:
+            tau = int(params.tau)
+            source = source[:-tau]
+            dest = dest[tau:]
+            cond = cond[tau:]
+
+        calc.initialise(
+            common_base,
+            int(params.k_dest),
+            1,                  # single conditional variable
+            common_base         # base for conditionals (compatible with common base)
+        )
+
+        # Add observations (must be Java int[])
+        j_source = java_array_int(source)
+        j_dest = java_array_int(dest)
+        j_cond = java_array_int(cond)
+        calc.addObservations(j_source, j_dest, j_cond)
+
+        # Compute CTE value
+        cte_value = float(calc.computeAverageLocalOfObservations())
+
+        # Significance testing
+        p_value = np.nan
+        if params.adaptive_stages and len(params.adaptive_stages) > 0:
+            last_p = np.nan
+            for n_surr in params.adaptive_stages:
+                md = calc.computeSignificance(int(n_surr))
+                last_p = float(md.pValue)
+                if params.early_stop_sig is not None and last_p <= params.early_stop_sig:
+                    break
+                if params.early_stop_nonsig is not None and last_p >= params.early_stop_nonsig:
+                    break
+            p_value = last_p
+        else:
+            md = calc.computeSignificance(int(params.num_surrogates))
+            p_value = float(md.pValue)
+
+        return (cte_value if np.isfinite(cte_value) else np.nan,
+                p_value if np.isfinite(p_value) else np.nan)
+    except Exception as e:
+        logger.error(f"TrueCTE.compute failed: {e}")
+        return (np.nan, np.nan)
+    finally:
+        gc.collect()
 
 class SymbolicTE:
     """Wrapper for Symbolic TE using ordinal patterns and DiscreteTE."""

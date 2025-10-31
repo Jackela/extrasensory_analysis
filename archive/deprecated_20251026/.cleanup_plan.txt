@@ -1,0 +1,43 @@
+# Project Cleanup Plan
+
+## REMOVE (Legacy/Process/Duplicate files):
+- analysis_tau_native.log (process log)
+- COMPLIANCE_*.md (4 files - legacy compliance docs)
+- EVALUATION_SUMMARY.md (legacy)
+- README_AUDIT.md (legacy)
+- RUN_ANALYSIS.md (legacy)
+- hs_err_pid284308.log (JVM crash log)
+- pipeline_output.log (process log)
+- results/compliance_test_*.csv/md (legacy test outputs)
+- run_final_k4_24h.py (superseded by run_smoke_corrected.py)
+- run_full_tau_native.py (superseded)
+- run_k4_24h_strict.py (superseded)
+- run_research_ops.py (legacy)
+- src/cross_method_reporter.py (unused)
+- src/cte_research_ops.py (legacy)
+- src/main.py (legacy entry point)
+- src/reproduce_te.py (legacy)
+- src/smoke_test.py (superseded by run_smoke_corrected.py)
+- src/verify_compliance.py (legacy)
+- test_compliance.py (legacy)
+- test_integration.py (legacy)
+- run_proposal_pipeline.py (has AIS overhead, keep but document)
+- run_smoke_test.py (superseded by run_smoke_corrected.py)
+
+## KEEP (Active/Required):
+- README.md (project documentation)
+- config/proposal.yaml (configuration)
+- tools/validate_outputs.py (validator)
+- run_smoke_corrected.py (production smoke test)
+- src/analysis.py
+- src/fdr_utils.py
+- src/granger_analysis.py
+- src/jidt_adapter.py
+- src/k_selection.py
+- src/params.py
+- src/preprocessing.py
+- src/proposal_config.py
+- src/settings.py
+- src/symbolic_te.py
+- tests/test_jidt_adapter.py
+- tests/test_tau_native.py

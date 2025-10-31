@@ -1,0 +1,54 @@
+# Validation preset (k_max=4): N=6 users, fixed surrogates=1000, run Global TE, Stratified-TE, and True CTE
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/validation_N6_k4_1k_<STAMP>"
+
+n_users: 6
+feature_modes: [composite]
+
+quality_profile: "balanced"
+taus: [1, 2]
+
+# Enable all hour-bin logic at 6 bins
+hour_bins: 6
+conditional_transfer_entropy:
+  hour_bins: 6
+  method: "STRATIFIED-CTE"
+
+# K-selection: AIS up to k=4
+k_selection:
+  strategy: "AIS"
+  k_grid: [1, 2, 3, 4]
+  k_max: 4
+  undersampling_guard: true
+
+# Fixed surrogate count (no adaptive early stop)
+surrogates: 1000
+statistical:
+  adaptive_surrogates:
+    enabled: false
+
+# JVM sizing for 6 concurrent workers (6×8g)
+jvm:
+  xms: "4g"
+  xmx: "8g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=300"
+    - "-Djava.awt.headless=true"
+
+runtime:
+  concurrency: 6
+  checkpoint: true
+  heartbeat_interval: 60
+
+# Which analyses to run in this validation
+analysis_modes: [global_te, stratified_te, true_cte]
+
+fdr:
+  families: [TE, CTE, STE, GC]
+  by_tau: true
+  alpha: 0.05
+
+schema_version: "v1.0"
+

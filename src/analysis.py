@@ -150,7 +150,8 @@ def find_optimal_k_ais(series: np.ndarray, base: int, max_k: int) -> int:
 
 
 def run_te_analysis(series_A: np.ndarray, series_S: np.ndarray, 
-                    k_A: int, k_S: int, base_A: int, base_S: int, tau: int = 1, num_surrogates: int = 1000) -> dict:
+                    k_A: int, k_S: int, base_A: int, base_S: int, tau: int = 1, num_surrogates: int = 1000,
+                    adaptive_stages=None, early_stop_sig: float = None, early_stop_nonsig: float = None) -> dict:
     """Computes TE(A->S), TE(S->A), and their p-values using JIDT adapter.
     
     Args:
@@ -177,6 +178,9 @@ def run_te_analysis(series_A: np.ndarray, series_S: np.ndarray,
             k_dest=k_S,
             tau=tau,
             num_surrogates=num_surrogates,
+            adaptive_stages=adaptive_stages,
+            early_stop_sig=early_stop_sig,
+            early_stop_nonsig=early_stop_nonsig,
             seed=42
         )
         calc_A2S = DiscreteTE(params_A2S)
@@ -199,6 +203,9 @@ def run_te_analysis(series_A: np.ndarray, series_S: np.ndarray,
             k_dest=k_A,
             tau=tau,
             num_surrogates=num_surrogates,
+            adaptive_stages=adaptive_stages,
+            early_stop_sig=early_stop_sig,
+            early_stop_nonsig=early_stop_nonsig,
             seed=42
         )
         calc_S2A = DiscreteTE(params_S2A)
@@ -223,7 +230,9 @@ def run_te_analysis(series_A: np.ndarray, series_S: np.ndarray,
 
 
 def run_cte_analysis(series_A: np.ndarray, series_S: np.ndarray, series_cond: np.ndarray,
-                     k_A: int, k_S: int, base_A: int, base_S: int, base_cond: int, tau: int = 1, num_surrogates: int = 1000) -> dict:
+                     k_A: int, k_S: int, base_A: int, base_S: int, base_cond: int,
+                     tau: int = 1, num_surrogates: int = 1000,
+                     adaptive_stages=None, early_stop_sig: float = None, early_stop_nonsig: float = None) -> dict:
     """Computes CTE(A->S|cond) and CTE(S->A|cond) using JIDT adapter.
     
     Args:
@@ -253,6 +262,9 @@ def run_cte_analysis(series_A: np.ndarray, series_S: np.ndarray, series_cond: np
             num_cond_bins=1,
             tau=tau,
             num_surrogates=num_surrogates,
+            adaptive_stages=adaptive_stages,
+            early_stop_sig=early_stop_sig,
+            early_stop_nonsig=early_stop_nonsig,
             seed=42
         )
         calc_A2S = StratifiedCTE(params_A2S)
@@ -276,6 +288,9 @@ def run_cte_analysis(series_A: np.ndarray, series_S: np.ndarray, series_cond: np
             num_cond_bins=1,
             tau=tau,
             num_surrogates=num_surrogates,
+            adaptive_stages=adaptive_stages,
+            early_stop_sig=early_stop_sig,
+            early_stop_nonsig=early_stop_nonsig,
             seed=42
         )
         calc_S2A = StratifiedCTE(params_S2A)
@@ -294,6 +309,74 @@ def run_cte_analysis(series_A: np.ndarray, series_S: np.ndarray, series_cond: np
     else:
         results['Delta_CTE_bin'] = np.nan
     
+    gc.collect()
+    return results
+
+
+def run_true_cte_analysis(series_A: np.ndarray, series_S: np.ndarray, series_cond: np.ndarray,
+                          k_A: int, k_S: int, base_A: int, base_S: int, base_cond: int,
+                          tau: int = 1, num_surrogates: int = 1000,
+                          adaptive_stages=None, early_stop_sig: float = None, early_stop_nonsig: float = None) -> dict:
+    """Computes True CTE(A->S|cond) and True CTE(S->A|cond) via JIDT ConditionalTransferEntropyCalculatorDiscrete.
+
+    Returns dictionary with CTE_true measures and p-values for both directions and their delta.
+    """
+    from src.jidt_adapter import compute_true_cte
+    from src.params import CTEParams
+    import gc
+    results = {}
+
+    try:
+        params_A2S = CTEParams(
+            base_source=base_A,
+            base_dest=base_S,
+            base_cond=base_cond,
+            k_source=k_A,
+            k_dest=k_S,
+            num_cond_bins=1,
+            tau=tau,
+            num_surrogates=num_surrogates,
+            adaptive_stages=adaptive_stages,
+            early_stop_sig=early_stop_sig,
+            early_stop_nonsig=early_stop_nonsig,
+            seed=42
+        )
+        cte_A2S, p_A2S = compute_true_cte(series_A, series_S, series_cond, params_A2S)
+        results['CTE_true(A->S|H)'] = cte_A2S
+        results['p_true_cte(A->S|H)'] = p_A2S
+    except Exception as e:
+        logger.error(f"True CTE(A->S|H) failed: {e}")
+        results['CTE_true(A->S|H)'] = np.nan
+        results['p_true_cte(A->S|H)'] = np.nan
+
+    try:
+        params_S2A = CTEParams(
+            base_source=base_S,
+            base_dest=base_A,
+            base_cond=base_cond,
+            k_source=k_S,
+            k_dest=k_A,
+            num_cond_bins=1,
+            tau=tau,
+            num_surrogates=num_surrogates,
+            adaptive_stages=adaptive_stages,
+            early_stop_sig=early_stop_sig,
+            early_stop_nonsig=early_stop_nonsig,
+            seed=42
+        )
+        cte_S2A, p_S2A = compute_true_cte(series_S, series_A, series_cond, params_S2A)
+        results['CTE_true(S->A|H)'] = cte_S2A
+        results['p_true_cte(S->A|H)'] = p_S2A
+    except Exception as e:
+        logger.error(f"True CTE(S->A|H) failed: {e}")
+        results['CTE_true(S->A|H)'] = np.nan
+        results['p_true_cte(S->A|H)'] = np.nan
+
+    if np.isfinite(results.get('CTE_true(A->S|H)', np.nan)) and np.isfinite(results.get('CTE_true(S->A|H)', np.nan)):
+        results['Delta_CTE_true'] = results['CTE_true(A->S|H)'] - results['CTE_true(S->A|H)']
+    else:
+        results['Delta_CTE_true'] = np.nan
+
     gc.collect()
     return results
 

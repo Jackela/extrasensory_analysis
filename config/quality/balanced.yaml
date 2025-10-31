@@ -19,7 +19,7 @@ quality_control:
   # Conditional Transfer Entropy (CTE) thresholds
   cte:
     min_total_samples: 200
-    min_bin_samples: 50  # Per hour bin/stratum
+    min_bin_samples: 100  # Chosen from 60-user (k=4) testing as a balance vs 50/150
     max_filtered_bins: 4  # Allow more flexibility
     max_filtered_ratio: 0.50  # Maximum 50% bins can be filtered
     action: "filter_bins"  # filter_bins | warn | skip
