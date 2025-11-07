@@ -1,203 +1,114 @@
-# ExtraSensory 因果信息分析（最终归档版）
+# ExtraSensory Causal Information Analysis (Final, English Only)
 
-本仓库包含一个针对 ExtraSensory 数据集的信息论因果分析流水线（基于 JIDT）。由于多次“方法论转向（pivot）”，历史代码与配置较为复杂。该 README 对核心背景进行一次性澄清，并给出最终归档与可复现入口。
+This repository provides an information-theoretic causal analysis pipeline for the ExtraSensory dataset, built on JIDT. Docs are now English-only and aligned with the final implementation pivot: True Conditional Transfer Entropy (True CTE) is the basis for conclusions; Global TE is computed opportunistically and recorded as NaN when high-k causes OOM.
 
-## 核心上下文（务必理解的 5 点）
+## Final Conclusion (N=60)
 
-1) 最初的计划：Global TE + Stratified-TE（分箱 + Fisher 合并）
-- 早期设计中，因果方向以 Transfer Entropy（TE）为主；条件因果以“先按小时分箱、在各箱内跑 TE、最后用 Fisher 合并 p 值”的 Stratified-TE 近似 CTE。
+- Hypothesis falsified: We reject the original hypothesis H1: E[ΔTE] > 0 (i.e., A→S stronger than S→A) on the full N=60 dataset [cite: 1-41].
+- Using True CTE at τ=1, the final mean ΔTE (bits) is -0.033426 [cite: 13-14].
+- Interpretation: After conditioning on hour-of-day (H), information flow from sitting to activity (S→A) is, on average, greater than the flow from activity to sitting (A→S).
+- A→S signal remains real and prevalent: at τ=1, 55.9% (33/60) of users show statistically significant A→S information flow after FDR correction (q < 0.05) [cite: 13-14].
 
-2) 验证阶段（第 1 阶段/1b 阶段）发现：Stratified-TE 在方法论上不可靠
-- 在 k=4 的验证条件下，Stratified-TE 的结论与 True CTE 的结论相反，暴露出方法论缺陷。因此 Stratified-TE 被标记为“已废弃”。
+## Key Context (5 concise points)
 
-3) 资源瓶颈：当 k≥5 时，Global TE 与 Stratified-TE 均可能 OOM
-- 在 8–12GB JVM 堆规模下，随着历史阶数 k 增大（尤其是 k=6），全局 TE 与分箱 TE 的状态空间爆炸，实践中会出现内存不足（OOM）。
+1) Original plan: Global TE + stratified CTE (per-hour TE + Fisher p-merge).
+2) Validation showed stratified CTE is methodologically unreliable at k=4, so it is deprecated.
+3) Resource reality: when k≥5, Global TE often OOMs with 8–12GB JVM heap due to state space explosion.
+4) Diagnostics: AIS-based k-selection shows 73% of users select k=6 (44/60) — see evidence file below.
+5) Final pivot: adopt True CTE as the core method; accept Global TE OOM at high k and record NaN.
 
-4) 诊断阶段（第 4 阶段）：k-Selection 诊断显示 73% 用户需要 k=6
-- 通过 AIS 的 k-selection 诊断，我们发现 73% 的用户（44/60）最优 k=6。
-- 该证据来自合并产物 `analysis/out/production_k6_true_cte_merged/k_selected_by_user_ALL.csv`，这是我们最终转向 True CTE 的核心依据。
+## Results and Evidence
 
-5) 最终的转向（The Pivot）：抛弃 Stratified-TE，接受 Global TE 的高 k OOM，核心采用 True CTE
-- 丢弃 Stratified-TE：因其在“第 1b 阶段”验证中被证明不可靠。
-- 接受 Global TE 在 k≥5 的 OOM：在最终运行中，Global TE 的 OOM 率约 73.3%，与“73% 用户需要 k=6”一致。这是有意为之、可接受的记录方式（记为 NaN），因为我们的核心方法 True CTE 能在 k=6 与 8GB 内存下稳定得出结果。
-- 选择 True CTE：方法论更稳健、内存效率更高，是最终结论的依据。
+- Final outputs: `analysis/out/FINAL_RUN_k60_COMPLETE`
+  - Includes `per_user_true_cte.csv` (primary), `per_user_te.csv` (NaN for OOM at high k), `run_info.yaml`, `k_selected_by_user.csv`.
+- Pivot evidence: `analysis/out/production_k6_true_cte_merged/k_selected_by_user_ALL.csv`
+  - Shows 44/60 users selecting k=6 with AIS, supporting the True CTE pivot and acceptance of TE OOM at high k.
 
-## 最终结果与证据
+- Sensitivity analysis (N=10; 12-cell grid): `analysis/out/sensitivity/20251107_1146/summary.csv`
+  - Evaluates discretization choices across A_bins ∈ {3,5,7}, S_mode ∈ {binary, quantile3}, H bins ∈ {6,12}, with a global AIS cap k ≤ 4 for stability.
+  - Outcome: all 12 combinations produce mean ΔCTE_true < 0; binary S-mode is strongly significant; quantile3 S-mode is consistently negative with marginal/non-significant p-values (~0.09–0.13). Directional conclusion is robust across all schemes under k ≤ 4.
 
-- 最终结果目录：`analysis/out/FINAL_RUN_k60_COMPLETE`
-  - 包含 `per_user_true_cte.csv`（核心结果）、`per_user_te.csv`（其中高 k OOM 记为 NaN）、`run_info.yaml`、`k_selected_by_user.csv` 等。
-- 转向证据：`analysis/out/production_k6_true_cte_merged/k_selected_by_user_ALL.csv`
-  - 该文件汇总 AIS 选 k 的诊断结果，显示 44/60 用户选到 k=6（73%），直接支撑我们转向 True CTE 并接受 Global TE 在高 k OOM 的决策。
+## Reproduction (Final Run Config)
 
-## 如何复现实验（最终运行配置）
+- Recommended config: `config/presets/production_k6_true_cte.yaml` (marked as FINAL RUN CONFIG).
+  - Runs Global TE and True CTE; TE may OOM at k≥5 and is recorded as NaN; True CTE produces the conclusions.
 
-- 使用最终运行配置：`config/presets/production_k6_true_cte.yaml`（文件头已标注 FINAL RUN CONFIG）。
-  - 仅运行 Global TE 与 True CTE；其中 Global TE 在 k≥5 可能 OOM，这一情况会被有意记录为 NaN 并继续流水线；True CTE 负责产出核心结论。
-
-示例：
+Examples:
 ```bash
-# 使用最终配置直接运行（推荐）
+# Direct (single-process)
 python run_production.py --config config/presets/production_k6_true_cte.yaml
 
-# 或按需分片/并行（Windows 下可用 *.bat 脚本等价方式）
+# Sharded execution (0-based shard/total)
 python run_production.py --config config/presets/production_k6_true_cte.yaml --shard 0/4
+# Or use helpers: run_parallel_4shards.sh / run_parallel_4shards.bat
 ```
 
-环境与资源建议：
-- Python 3.12+，Java 8+，JIDT 已配置
-- 单进程 8–12GB JVM 堆；并行时按进程数线性叠加内存（例：4 进程≈32–48GB）
+Environment and resources:
+- Python 3.12+, Java 8+, JIDT available (`jidt/infodynamics.jar`)
+- JVM heap per process: 8–12GB; parallel processes require linear aggregate RAM
 
-## 代码与配置清理说明
+## Exact Implementation
 
-- `run_production.py`：在 Global TE 的 try...except 上方新增注释，明确这是“有意处理的 OOM”，当 k≥5 发生内存不足时记 NaN 并继续，因为 True CTE 在 k=6 能成功运行。
-- `src/jidt_adapter.py`：在 Stratified-TE（Fisher 合并法）函数上方添加“[已废弃]”注释，说明其在“第 1b 阶段”验证中不可靠，已由 `compute_true_cte` 取代。
-- `config/`：
-  - `config/presets/production_k6_true_cte.yaml` 已标注为“FINAL RUN CONFIG”。
-  - 旧配置移至 `config/archive/`，并附 `config/archive/README.md` 解释其在方法论演进中的角色（如验证用 `validation_N6_k4_1k.yaml`、诊断用 `diagnostic_k_qc.yaml`）。
+- Features
+  - Composite mode: includes SMA and tri-axis variance with hour-of-day conditioning for CTE.
+  - Alternatives (configurable): `sma_only`, `variance_only`, `magnitude_only`.
 
-## 你可能关心的问题（FAQ）
+- K-selection (AIS)
+  - AIS(k) = I(X_t; X_{t-k:t-1}), select k = argmax_k AIS(k) over grid [1..6].
+  - Strategies: `AIS` (unbounded), `GUARDED_AIS` (e.g., k_max=4 + undersampling guard), `FIXED`.
 
-- 为什么接受 Global TE 的 OOM？
-  - 因为大多数用户需要 k=6 才能建模最优，这时 Global TE 的状态空间导致 OOM 是可预期的。我们用 NaN 记录，并将结论基于能在 k=6 成功运行的 True CTE。
+- Global TE (unconditional)
+  - JIDT `TransferEntropyCalculatorDiscrete` via 0-arg constructor + 6-arg `initialise(base, k_dest, 1, k_source, 1, delay)`.
+  - Delay equals `tau`; histories use consecutive lag (`k_tau=1`).
+  - Surrogates: fixed `surrogates` or staged `adaptive_stages` per config.
+  - If OOM at high k, TE value recorded as NaN by design; pipeline continues.
 
-- Stratified-TE 为什么被弃用？
-  - 在 k=4 验证中它与 True CTE 的结论相反，显示出方法论不可靠。因此从“第 1b 阶段”起弃用，改用 True CTE。
+- True Conditional TE (core)
+  - JIDT `ConditionalTransferEntropyCalculatorDiscrete` with 4-arg initialise signature:
+    - `initialise(base=max(base_A, base_S), history=k_S, numOtherInfoContributors=1, base_others=base_H)`; a single conditional variable (hour-of-day bin).
+  - For `tau>1`, inputs are data-lagged prior to passing into JIDT: `source[:-tau]`, `dest[tau:]`, `cond[tau:]`.
+  - Observations added as Java `int[]`; computes `computeAverageLocalOfObservations()`.
+  - Significance: fixed surrogates or staged `adaptive_stages`; last stage p-value is returned.
 
-- 我应查看哪个结果文件？
-  - 核心看 `analysis/out/FINAL_RUN_k60_COMPLETE/per_user_true_cte.csv`。Global TE 的 `per_user_te.csv` 可作参考，但其中高 k 的 NaN 属于有意记录。
+- Statistical testing
+  - FDR: Benjamini–Hochberg per (family, tau). Families: `TE`, `CTE`, `STE`, `GC`. Alpha=0.05.
+  - Outputs include raw p-values and FDR-corrected q-values.
 
-## 目录索引
-
-- 最终结果：`analysis/out/FINAL_RUN_k60_COMPLETE`
-- 转向依据：`analysis/out/production_k6_true_cte_merged/k_selected_by_user_ALL.csv`
-- 最终配置：`config/presets/production_k6_true_cte.yaml`
-- 归档配置：`config/archive/`（含说明 README）
-
-
-Where:
-- **SMA** (Signal Magnitude Area) = (|ax| + |ay| + |az|) / 3
-- **Variance** = √(std_x² + std_y² + std_z²)
-
-**Alternative Modes** (configurable):
-- `sma_only`: SMA only
-- `variance_only`: Tri-axis variance only
-- `magnitude_only`: Raw magnitude mean (baseline)
-
-### K-Selection via AIS
-
-**Active Information Storage (AIS)**:
-```
-AIS(k) = I(X_t; X_{t-k:t-1})
-k_selected = argmax_k AIS(k)
-```
-
-**Strategies**:
-
-1. **AIS** (Pure, current):
-   - No constraints, selects optimal k from grid [1-6]
-   - Risk: Large k → state space explosion
-
-2. **GUARDED_AIS** (Available):
-   - Optional `k_max` hard cap
-   - Optional `undersampling_guard` (≥25 samples/state)
-
-3. **FIXED**:
-   - Use fixed k for all users (fast, no optimization)
-
-**State Space Analysis** (k=6):
-```
-A states: 5^6 = 15,625
-S states: 2^6 = 64
-Total: 5^6 × 2^6 = 1,000,000 states
-
-Performance impact:
-- k=4: 1.5s per TE computation
-- k=6: 19 min per TE computation (760x slower, expected)
-```
-
-### Transfer Entropy Implementation
-
-**TE (Unconditional)**:
-```
-TE(A→S, τ) = I(S_t; A_{t-τ:t-τ-k+1} | S_{t-1:t-l})
-```
-
-**CTE (Conditional on Hour-of-Day)**:
-- Method: **STRATIFIED-CTE**
-- Key: Data-level lag **before** stratification
-- Bins: 6 (4-hour windows: 00-04, 04-08, 08-12, 12-16, 16-20, 20-24)
-
-**Implementation**:
-- JIDT v1.5 `DiscreteTE` with 6-arg initialization
-- Permutation surrogates: 1000 (configurable)
-- Direction: Both A→S and S→A computed
-
-### Statistical Testing
-
-**FDR Correction** (Benjamini-Hochberg):
-- Grouping: Per (family, tau) for independence
-- Families: TE, CTE, STE, GC
-- Alpha: 0.05
-- Output: Both p-values and q-values (FDR-corrected)
-
-**Significance**:
-- Individual: q < 0.05
-- Directionality: Delta_TE with corrected p-value
-
-## Performance Optimization
-
-**Memory Optimization**:
-- JVM heap: 12GB minimum for k=6 (validated empirically)
-- Multi-process user sharding to utilize all CPU cores
-
-**Computational Complexity**:
-```
-Time per user (k=6, composite, 2 taus):
-- TE tau=1:    19 min
-- TE tau=2:    20 min
-- CTE tau=1:   99 min
-- CTE tau=2:  100 min
-- STE + GC:     1 min
-Total:         ~4 hours
-
-Full analysis (60 users, 4 processes):
-- 15 users/process × 4 hours = 60 hours
-```
+- Performance notes
+  - State space at k=6: 5^6 × 2^6 ≈ 1e6 states; TE runtime jumps from seconds (k=4) to minutes (k=6).
+  - Parallel sharding across users strongly recommended for k=6.
 
 ## Project Structure
 
 ```
 extrasensory_analysis/
 ├── config/
-│   ├── template.yaml           # Configuration reference template
-│   ├── presets/                # Pre-configured analysis profiles
-│   ├── README.md               # Config documentation
-│   └── MIGRATION_NOTES.md      # Hardcoded → config migration
+│   ├── template.yaml           # Parameter reference
+│   ├── presets/                # Preset profiles
+│   ├── README.md               # Config docs (English only)
+│   └── MIGRATION_NOTES.md      # Legacy-to-config migration
 ├── src/
-│   ├── analysis.py             # TE/CTE/STE/GC implementations
-│   ├── preprocessing.py        # Data loading + feature engineering
-│   ├── k_selection.py          # AIS-based k selection
-│   ├── fdr_utils.py            # FDR correction utilities
-│   ├── granger_analysis.py     # VAR-based Granger causality
-│   ├── symbolic_te.py          # Symbolic transfer entropy
-│   ├── jidt_adapter.py         # JIDT Java bridge
-│   └── settings.py             # Legacy constants (being phased out)
-├── tools/
-│   └── validate_outputs.py     # Schema validation
-├── tests/
-│   └── ...                     # Unit tests
-├── run_production.py           # Main pipeline with --shard support
-├── run_parallel_4shards.sh     # Parallel execution launcher (Linux/macOS)
-├── run_parallel_4shards.bat    # Parallel execution launcher (Windows)
-├── merge_shard_results.py      # Results merger for parallel runs
-├── PARALLEL_EXECUTION.md       # Parallel execution guide
-├── EXECUTION_PLAN.md           # Performance analysis
-├── PROJECT_STATUS.md           # Current implementation status
-├── QUICK_START.md              # Quick reference
-└── README.md                   # This file
+│   ├── analysis.py             # TE/CTE/STE/GC pipeline
+│   ├── preprocessing.py        # Data loading + features
+│   ├── k_selection.py          # AIS k-selection
+│   ├── fdr_utils.py            # FDR utilities
+│   ├── granger_analysis.py     # VAR Granger causality
+│   ├── symbolic_te.py          # Symbolic TE
+│   ├── jidt_adapter.py         # JIDT bridge (TE, True CTE)
+│   └── settings.py             # Legacy constants
+├── tools/                      # Validators and diagnostics
+├── tests/                      # Unit tests
+├── run_production.py           # Main entrypoint (supports --shard)
+├── run_parallel_4shards.*      # Parallel helpers
+├── merge_shard_results.py      # Merge outputs from shards
+└── docs/                       # Methods and specs
 ```
 
 ## Troubleshooting
+
+- TE OOM at high k: expected; values recorded as NaN; True CTE drives conclusions.
+- Long runtime at k=6: use 4-process sharding and ensure sufficient RAM.
+- JIDT not found: ensure `jidt/infodynamics.jar` is present and Java 8+ is installed.
 
 **JVM Out of Memory (k=6)**:
 ```
@@ -284,3 +195,6 @@ Contributions welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
 - **ExtraSensory Dataset**: Yonatan Vaizman, Katherine Ellis, Gert Lanckriet (UCSD)
 - **JIDT**: Joseph T. Lizier (University of Sydney)
 - **Python Scientific Stack**: NumPy, Pandas, SciPy, scikit-learn, statsmodels
+## Limitations and Future Work
+
+- Permutation testing: This study uses JIDT's standard surrogate testing (the default permutation tester) for significance assessment. While widely adopted, these surrogates do not fully preserve the temporal autocorrelation structure of time series. Future work should consider block permutation (block bootstrap style surrogates) or phase-randomized surrogates to better respect serial dependence when evaluating TE/CTE significance.

@@ -1,4 +1,14 @@
-"""JIDT adapters with 48G heap support and STRATIFIED-CTE implementation."""
+"""
+JIDT adapters for discrete TE/CTE and symbolic TE.
+
+This module provides thin wrappers around JIDT calculators with explicit
+contract-style docstrings and English-only documentation. It implements:
+- Discrete TE with delay (tau) via 6-arg initialise
+- True (conditional) TE using ConditionalTransferEntropyCalculatorDiscrete
+- Symbolic TE via ordinal pattern encoding
+
+@module jidt_adapter
+"""
 import logging
 import gc
 import numpy as np
@@ -11,7 +21,17 @@ logger = logging.getLogger(__name__)
 
 
 def validate_series(series: np.ndarray, base: int, name: str) -> np.ndarray:
-    """Validate and convert series to int32."""
+    """
+    Validate a discrete time series and convert it to int32 within [0, base-1].
+
+    @param {np.ndarray|Sequence[int]} series - Discrete series to validate.
+    @param {int} base - Alphabet size; symbols must be in [0, base-1].
+    @param {str} name - Human-readable series name for error messages.
+    @returns {np.ndarray} int32 array with validated symbols.
+    @throws {ValueError} If series is empty, contains NaN/Inf, or values out of range.
+    @pre base >= 2 and name is non-empty.
+    @post Returned array has dtype int32 and length > 0.
+    """
     if not isinstance(series, np.ndarray):
         series = np.array(series)
     
@@ -30,7 +50,14 @@ def validate_series(series: np.ndarray, base: int, name: str) -> np.ndarray:
 
 
 def java_array_int(py_array: np.ndarray) -> JArray:
-    """Convert numpy int32 array to Java int[]."""
+    """
+    Convert a numpy array to a Java int[] for JPype/JIDT interop.
+
+    @param {np.ndarray|Sequence[int]} py_array - Source array.
+    @returns {JArray} Java int[] with the same values.
+    @pre Input is convertible to a 1-D int32 numpy array.
+    @post Result length equals input length.
+    """
     if not isinstance(py_array, np.ndarray):
         py_array = np.array(py_array, dtype=np.int32)
     if py_array.dtype != np.int32:
@@ -39,7 +66,13 @@ def java_array_int(py_array: np.ndarray) -> JArray:
 
 
 class DiscreteTE:
-    """Wrapper for TransferEntropyCalculatorDiscrete with native 6-arg initialise for tau."""
+    """
+    Wrapper for JIDT TransferEntropyCalculatorDiscrete using 6-arg initialise.
+
+    @param {TEParams} params - TE configuration including bases, histories, and delay (tau).
+    @pre JPype JVM is started and JIDT classes are available on the classpath.
+    @invariant self.calc is either None or a live JIDT calculator instance.
+    """
     
     def __init__(self, params: TEParams):
         self.params = params
@@ -64,7 +97,16 @@ class DiscreteTE:
         logger.debug(f"DiscreteTE initialized: base={common_base}, k_dest={params.k_dest}, k_src={params.k_source}, delay={params.tau}")
     
     def compute(self, source: np.ndarray, dest: np.ndarray) -> Tuple[float, float]:
-        """Compute TE and p-value."""
+        """
+        Compute discrete TE and an associated p-value via surrogate testing.
+
+        @param {np.ndarray} source - Source series with alphabet size params.base_source.
+        @param {np.ndarray} dest - Destination series with alphabet size params.base_dest.
+        @returns {[float, float]} A tuple (te_value, p_value); NaN on failure.
+        @throws {ValueError} If validation fails (length mismatch, invalid symbols).
+        @pre len(source) == len(dest) > 0.
+        @post Returned values are finite or NaN when errors occur; internal GC invoked.
+        """
         try:
             # Validate
             source = validate_series(source, self.params.base_source, "source")
@@ -105,28 +147,40 @@ class DiscreteTE:
             gc.collect()
     
     def dispose(self):
-        """Clean up calculator."""
+        """
+        Dispose the underlying calculator and trigger GC.
+
+        @post self.calc is None.
+        """
         self.calc = None
         gc.collect()
 
 
 class StratifiedCTE:
-    """[已废弃] STRATIFIED-TE（Fisher 合并法）实现。
+    """
+    Deprecated stratified-CTE (Fisher-merged) implementation.
 
-    原方法基于先分箱再在各箱内计算 TE，并用 Fisher 法合并 p 值：
-    CTE(A→S|H) = Σ_h p(h)·TE_h(A→S)。
+    The method computes TE within hour-of-day bins and merges p-values using Fisher's
+    method. It was found to be methodologically unreliable at k=4 during validation
+    (opposite conclusions to True CTE) and is kept only for historical reference.
 
-    在“第 1b 阶段”验证中，我们发现该方法在 k=4 验证时与 True CTE 的结论相反，
-    因方法论不可靠已被弃用。自此，推荐并采用 compute_true_cte 作为 CTE 的核心实现。
+    @deprecated Use compute_true_cte() instead.
     """
     
     def __init__(self, params: CTEParams):
         self.params = params
     
     def compute(self, source: np.ndarray, dest: np.ndarray, cond: np.ndarray) -> Tuple[float, float]:
-        """Compute stratified CTE and aggregate p-value.
-        
-        For tau>1: applies data-level lag BEFORE stratification (global alignment).
+        """
+        Compute stratified CTE and aggregate p-value via Fisher's method.
+
+        @param {np.ndarray} source - Source series (A) with base params.base_source.
+        @param {np.ndarray} dest - Destination series (S) with base params.base_dest.
+        @param {np.ndarray} cond - Conditioning series (hour bin) with base params.base_cond.
+        @returns {[float, float]} Weighted-average CTE and merged p-value; NaN on failure.
+        @pre len(source) == len(dest) == len(cond) > 0; symbols within their bases.
+        @post Returns NaN,NaN if no strata produced valid TE.
+        @note For tau>1, applies data-level lag BEFORE stratification.
         """
         try:
             # Validate
@@ -206,14 +260,27 @@ class StratifiedCTE:
 
 
 def compute_true_cte(source: np.ndarray, dest: np.ndarray, cond: np.ndarray, params: CTEParams) -> Tuple[float, float]:
-    """Compute True Conditional Transfer Entropy using JIDT's ConditionalTransferEntropyCalculatorDiscrete.
+    """
+    Compute True Conditional Transfer Entropy using JIDT's discrete conditional TE.
 
-    Uses 8-arg initialise with common_base and hard-coded conditioning history k_cond=1 and k_cond_tau=1,
-    conditioning on the current hour bin only. Delay (tau) is passed to the calculator; input arrays are
-    not manually lagged.
-
-    Returns (cte_value, p_value) using fixed-num-surrogates significance unless adaptive stages are provided
-    in params (in which case the last stage p-value is returned).
+    @param {np.ndarray} source - Source series (A) with base params.base_source.
+    @param {np.ndarray} dest - Destination series (S) with base params.base_dest.
+    @param {np.ndarray} cond - Conditioning series (hour bin) with base params.base_cond.
+    @param {CTEParams} params - CTE configuration (k_dest, tau, surrogates, adaptive stages).
+    @returns {[float, float]} A tuple (cte_value, p_value); NaN on failure.
+    @throws {ValueError} If input validation fails or lengths mismatch.
+    @pre len(source) == len(dest) == len(cond) > 0; symbols within their bases.
+    @post Returns finite values or NaN on failure; arrays are garbage-collected.
+    @note For tau>1, data-level lag is applied to align series before adding observations.
+    @note JIDT ConditionalTransferEntropyCalculatorDiscrete initialise MUST use the 4-arg signature:
+          initialise(int base, int history, int numOtherInfoContributors, int base_others).
+          Here we set:
+            - base = max(base_A, base_S)
+            - history = k_S (destination history)
+            - numOtherInfoContributors = 1
+            - base_others = base_H (hour bins)
+          JIDT API for this calculator does not expose separate setters for k_A (source history),
+          hence k_A is effectively tied to k_S. Callers should ensure k_A == k_S for consistency.
     """
     try:
         # Validate inputs against their native bases
@@ -224,14 +291,16 @@ def compute_true_cte(source: np.ndarray, dest: np.ndarray, cond: np.ndarray, par
         if not (len(source) == len(dest) == len(cond)):
             raise ValueError(f"Length mismatch: source={len(source)}, dest={len(dest)}, cond={len(cond)}")
 
-        # Common base across variables (A base=5, S base=2, H base=6 -> common_base=6)
-        common_base = int(max(params.base_source, params.base_dest, params.base_cond))
+        # Set bases according to JIDT's required initialise signature
+        # base = max(base_A, base_S); base_others = base_H
+        base_main = int(max(params.base_source, params.base_dest))
+        base_others = int(params.base_cond)
 
         # Construct calculator
         CTECalc = jpype.JClass("infodynamics.measures.discrete.ConditionalTransferEntropyCalculatorDiscrete")
         calc = CTECalc()
 
-        # JIDT Discrete CTE uses 4-arg initialise(base, history(k_dest), numOtherInfoContributors, base_others)
+        # JIDT Discrete CTE uses 4-arg initialise(base, history=k_S, numOtherInfoContributors=1, base_others)
         # It assumes source and conditional are taken at r-1 (i.e., tau=1). For tau>1 we apply data-level lag.
         if int(params.tau) > 1:
             tau = int(params.tau)
@@ -240,36 +309,46 @@ def compute_true_cte(source: np.ndarray, dest: np.ndarray, cond: np.ndarray, par
             cond = cond[tau:]
 
         calc.initialise(
-            common_base,
-            int(params.k_dest),
-            1,                  # single conditional variable
-            common_base         # base for conditionals (compatible with common base)
+            base_main,
+            int(params.k_dest),  # k_S (destination history)
+            1,            # single conditional variable
+            base_others   # base for conditionals (hour bins)
         )
 
-        # Add observations (must be Java int[])
+        # Add observations (must be Java int[]); order is (source, dest, cond)
         j_source = java_array_int(source)
         j_dest = java_array_int(dest)
         j_cond = java_array_int(cond)
         calc.addObservations(j_source, j_dest, j_cond)
 
-        # Compute CTE value
-        cte_value = float(calc.computeAverageLocalOfObservations())
+        # Compute CTE value (separate from significance so failures in significance don't drop value)
+        cte_value = float('nan')
+        try:
+            cte_value = float(calc.computeAverageLocalOfObservations())
+        except Exception as e:
+            logger.error(f"TrueCTE.value failed: {e}")
+            cte_value = float('nan')
 
-        # Significance testing
-        p_value = np.nan
-        if params.adaptive_stages and len(params.adaptive_stages) > 0:
-            last_p = np.nan
-            for n_surr in params.adaptive_stages:
-                md = calc.computeSignificance(int(n_surr))
-                last_p = float(md.pValue)
-                if params.early_stop_sig is not None and last_p <= params.early_stop_sig:
-                    break
-                if params.early_stop_nonsig is not None and last_p >= params.early_stop_nonsig:
-                    break
-            p_value = last_p
-        else:
-            md = calc.computeSignificance(int(params.num_surrogates))
-            p_value = float(md.pValue)
+        # Significance testing (best-effort)
+        p_value = float('nan')
+        try:
+            if params.adaptive_stages and len(params.adaptive_stages) > 0:
+                last_p = float('nan')
+                for n_surr in params.adaptive_stages:
+                    md = calc.computeSignificance(int(n_surr))
+                    last_p = float(md.pValue)
+                    if params.early_stop_sig is not None and last_p <= params.early_stop_sig:
+                        break
+                    if params.early_stop_nonsig is not None and last_p >= params.early_stop_nonsig:
+                        break
+                p_value = last_p
+            else:
+                md = calc.computeSignificance(int(params.num_surrogates))
+                p_value = float(md.pValue)
+        except Exception as e:
+            # Keep the CTE value but fall back to NaN p-value on significance failure
+            logger.error(f"TrueCTE.significance failed: {e}")
+            p_value = float('nan')
 
         return (cte_value if np.isfinite(cte_value) else np.nan,
                 p_value if np.isfinite(p_value) else np.nan)
@@ -280,13 +359,26 @@ def compute_true_cte(source: np.ndarray, dest: np.ndarray, cond: np.ndarray, par
         gc.collect()
 
 class SymbolicTE:
-    """Wrapper for Symbolic TE using ordinal patterns and DiscreteTE."""
+    """
+    Wrapper for Symbolic Transfer Entropy using ordinal patterns + DiscreteTE.
+
+    @param {STEParams} params - Symbolic TE configuration including ordinal dimension and delay.
+    @pre Ordinal dimension >= 2 and sufficient series length for encoding.
+    """
     
     def __init__(self, params: STEParams):
         self.params = params
     
     def ordinal_pattern_encode(self, series: np.ndarray) -> np.ndarray:
-        """Encode series as ordinal patterns."""
+        """
+        Encode a numeric series as ordinal patterns.
+
+        @param {np.ndarray} series - Numeric time series.
+        @returns {np.ndarray} Discrete sequence of ordinal pattern indices (int32).
+        @throws {ValueError} If series is too short for the given ordinal parameters.
+        @pre n_patterns = n - (dim-1)*delay >= 10.
+        @post Returns length n_patterns array with values in [0, dim!-1].
+        """
         from itertools import permutations
         
         n = len(series)
@@ -310,7 +402,15 @@ class SymbolicTE:
         return patterns
     
     def compute(self, source: np.ndarray, dest: np.ndarray) -> Tuple[float, float]:
-        """Compute STE and p-value."""
+        """
+        Compute Symbolic TE and p-value by encoding both series as ordinal patterns.
+
+        @param {np.ndarray} source - Source numeric series.
+        @param {np.ndarray} dest - Destination numeric series.
+        @returns {[float, float]} (ste_value, p_value); NaN on failure or insufficient data.
+        @pre After encoding, min(len(source_pat), len(dest_pat)) >= 100.
+        @post Returns NaN if insufficient data; otherwise values from DiscreteTE.
+        """
         try:
             import math
             
