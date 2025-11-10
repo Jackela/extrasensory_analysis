@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 """
-Quality diagnostics utility for ExtraSensory pipeline.
+Quality diagnostics utility for the ExtraSensory pipeline.
 
 Demonstrates dynamic threshold estimation and statistical power calculation.
+Docstrings follow JSDoc-style with DbC notes.
+
+@module quality_diagnostics
 """
 
 import sys
@@ -15,7 +18,12 @@ from src.quality_control import QualityController
 
 
 def demonstrate_diagnostics():
-    """Demonstrate quality diagnostic capabilities."""
+    """
+    Demonstrate quality diagnostic capabilities on example inputs.
+
+    @returns {None}
+    @post Prints multiple diagnostic summaries to stdout.
+    """
     
     print("=" * 70)
     print("ExtraSensory Quality Control - Diagnostic Utilities")
@@ -110,7 +118,12 @@ def demonstrate_diagnostics():
 
 
 def compare_profiles():
-    """Compare quality thresholds across profiles."""
+    """
+    Compare quality thresholds across profiles (strict/balanced/exploratory).
+
+    @returns {None}
+    @post Prints a formatted comparison to stdout.
+    """
     
     print("\n" + "=" * 70)
     print("Quality Profile Comparison")

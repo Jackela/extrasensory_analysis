@@ -1,5 +1,12 @@
 #!/usr/bin/env python
-"""Merge results from multiple shards into single output directory."""
+"""
+Merge results from multiple shards into a single output directory.
+
+Performs CSV concatenation, copies and augments run_info.yaml, and aggregates
+status.json into a merged summary.
+
+@module merge_shard_results
+"""
 
 import argparse
 import pandas as pd
@@ -9,7 +16,16 @@ import yaml
 import json
 
 def merge_csv_files(shard_dirs, output_file, filename):
-    """Merge CSV files from all shards."""
+    """
+    Merge a given CSV across shard directories.
+
+    @param {List[Path]} shard_dirs - List of shard directories.
+    @param {Path} output_file - Destination merged CSV path.
+    @param {str} filename - CSV filename present in each shard dir.
+    @returns {int} Total merged rows written (0 if none found).
+    @pre Each shard dir may or may not contain the CSV.
+    @post Writes merged CSV if at least one shard CSV exists.
+    """
     dfs = []
     for shard_dir in shard_dirs:
         csv_path = shard_dir / filename
@@ -26,6 +42,12 @@ def merge_csv_files(shard_dirs, output_file, filename):
     return 0
 
 def main():
+    """
+    CLI entry point to merge shard results.
+
+    @returns {None}
+    @post Creates output dir with merged CSVs, run_info.yaml, and status.json.
+    """
     parser = argparse.ArgumentParser(description="Merge shard results")
     parser.add_argument('--shards', nargs='+', required=True, help="Shard output directories")
     parser.add_argument('--output', required=True, help="Merged output directory")

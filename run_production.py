@@ -25,7 +25,14 @@ from src.quality_control import QualityController, DataQualityError
 
 # Setup logging to both file and console
 def setup_logging(out_dir):
-    """Configure logging to pipeline.log and console with proper levels."""
+    """
+    Configure logging to both `pipeline.log` and console.
+
+    @param {Path} out_dir - Output directory where `pipeline.log` is written.
+    @returns {logging.Logger} Root logger configured with file and console handlers.
+    @pre out_dir exists or is creatable by the caller.
+    @post File handler captures DEBUG+; console handler captures INFO+.
+    """
     log_file = out_dir / 'pipeline.log'
     
     # Create formatters
@@ -54,7 +61,15 @@ logger = logging.getLogger(__name__)
 
 
 class ProductionPipeline:
-    """Production pipeline with comprehensive tracking and monitoring."""
+    """
+    Production pipeline with comprehensive tracking and monitoring.
+
+    @param {str|Path} config_path - Path to YAML config (preset or custom).
+    @param {str|Path|null} resume_dir - Existing output dir to resume from.
+    @param {str|null} shard - Shard spec `i/N` for parallelized runs.
+    @param {bool} no_progress - Disable progress bar output.
+    @invariant self.out_dir is a directory; self.config validated.
+    """
     
     def __init__(self, config_path, resume_dir=None, shard: str = None, no_progress: bool = False):
         with open(config_path) as f:
@@ -137,7 +152,13 @@ class ProductionPipeline:
         self.current_stage = None  # Track current processing stage
     
     def _load_quality_control(self):
-        """Load quality control configuration from profile or inline config."""
+        """
+        Load quality control configuration from profile or inline config.
+
+        @returns {QualityController} Initialized controller with thresholds.
+        @pre config has `quality_profile` or inline `quality_control`.
+        @post Returns a controller ready for validation and reporting.
+        """
         quality_profile = self.config.get('quality_profile', 'balanced')
         
         # Try to load quality profile file
@@ -162,7 +183,11 @@ class ProductionPipeline:
         return QualityController(quality_config)
     
     def get_git_info(self):
-        """Get git commit hash and status."""
+        """
+        Get git commit hash and short working tree status.
+
+        @returns {dict} {'commit','dirty','status'} or fallbacks when git absent.
+        """
         try:
             commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
             status = subprocess.check_output(['git', 'status', '--short'], text=True).strip()
@@ -175,14 +200,23 @@ class ProductionPipeline:
             return {'commit': 'unknown', 'dirty': False, 'status': 'N/A'}
     
     def get_jidt_version(self):
-        """Extract JIDT version from jar."""
+        """
+        Extract JIDT version metadata from the jar location.
+
+        @returns {dict} {'jar','version','detected'} with best-effort detection.
+        """
         jar_path = Path('jidt/infodynamics.jar')
         if jar_path.exists():
             return {'jar': str(jar_path), 'version': 'v1.5', 'detected': True}
         return {'jar': 'N/A', 'version': 'unknown', 'detected': False}
     
     def load_checkpoint(self):
-        """Load existing results from checkpoint files."""
+        """
+        Load existing results from checkpoint CSV files in the output dir.
+
+        @returns {int} Count of user-feature combinations already completed.
+        @post Internal result buffers and completed set are populated.
+        """
         checkpoint_files = {
             'te': self.out_dir / 'per_user_te.csv',
             'cte': self.out_dir / 'per_user_cte.csv',
@@ -212,7 +246,14 @@ class ProductionPipeline:
         return len(self.completed_combinations)
     
     def save_checkpoint(self, method, data):
-        """Save incremental checkpoint after each user-method completion."""
+        """
+        Save an incremental checkpoint after a method completes for a user.
+
+        @param {str} method - One of 'te','cte','true_cte','ste','gc','k_selected','hbin_counts'.
+        @param {dict|list[dict]} data - Row or rows to append/save.
+        @returns {None}
+        @post Corresponding CSV exists and contains the new rows.
+        """
         file_map = {
             'te': 'per_user_te.csv',
             'cte': 'per_user_cte.csv',
@@ -235,7 +276,13 @@ class ProductionPipeline:
             df_new.to_csv(fpath, index=False)
     
     def write_run_info(self, seed=None):
-        """Write run_info.yaml with environment details."""
+        """
+        Write `run_info.yaml` with environment details and configuration.
+
+        @param {int|null} seed - Optional RNG seed to record for reproducibility.
+        @returns {None}
+        @post `run_info.yaml` exists in `self.out_dir` with metadata.
+        """
         git_info = self.get_git_info()
         jidt_info = self.get_jidt_version()
         
@@ -269,7 +316,14 @@ class ProductionPipeline:
         logger.info(f"run_info.yaml written: git={git_info['commit']}, JIDT={jidt_info['version']}")
     
     def update_heartbeat(self, current_user=None, current_stage=None):
-        """Update status.json with progress, ETA, and sub-task details."""
+        """
+        Update `status.json` with current progress, ETA, and latest task info.
+
+        @param {str|null} current_user - Current user ID being processed.
+        @param {str|null} current_stage - Human-readable stage description.
+        @returns {None}
+        @post `status.json` reflects current pipeline progress.
+        """
         elapsed = (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
         
         if self.users_completed > 0:
@@ -322,7 +376,15 @@ class ProductionPipeline:
             json.dump(status, f, indent=2)
     
     def compute_hbin_counts(self, H_raw, user_id, feature_mode):
-        """Compute per-hour bin sample counts."""
+        """
+        Compute and record hour-bin sample counts for diagnostics/reporting.
+
+        @param {np.ndarray} H_raw - Hour-of-day values (0..23).
+        @param {str} user_id - User UUID string.
+        @param {str} feature_mode - Feature engineering mode.
+        @returns {dict|None} Summary row appended to `self.results['hbin_counts']` or None when empty.
+        @post Adds a record to hbin counts; returns that record.
+        """
         if len(H_raw) == 0:
             return
         
@@ -341,11 +403,19 @@ class ProductionPipeline:
         self.save_checkpoint('hbin_counts', hbin_result)
     
     def select_k(self, S, base_S, user_id, H_raw=None):
-        """Select k via AIS or fixed k.
-        
+        """
+        Select k via AIS or use a fixed k from config.
+
         AIS strategy supports optional constraints:
         - k_max: Hard cap on k (e.g., 4 for computational feasibility)
         - undersampling_guard: Prevent undersampled states (min 25 samples/state)
+
+        @param {np.ndarray} S - Destination series for AIS-based k-selection.
+        @param {int} base_S - Alphabet size for S.
+        @param {str} user_id - User identifier for logging.
+        @param {np.ndarray|null} H_raw - Optional hour-of-day raw values.
+        @returns {int} Selected k value.
+        @post Logs selection details; returns a valid k >= 1.
         """
         k_strategy = self.config.get('k_selection', {}).get('strategy', 'fixed')
         
@@ -398,7 +468,14 @@ class ProductionPipeline:
             return self.config.get('k_selection', {}).get('k_fixed', 4)
     
     def process_user(self, user_id, feature_mode):
-        """Process single user-feature combination."""
+        """
+        Process a single (user, feature_mode) combination end-to-end.
+
+        @param {str} user_id - Full user UUID.
+        @param {str} feature_mode - Feature engineering mode name.
+        @returns {None}
+        @post Results and errors are appended to their respective buffers.
+        """
         # Create short UUID mapping
         short_id = user_id[:8]
         self.uuid_map[user_id] = short_id
@@ -518,16 +595,17 @@ class ProductionPipeline:
                         logger.info(f"{short_id} | TE | tau={tau} SKIP | {e}")
                         continue
                     
-                    # NOTE ON INTENTIONAL OOM HANDLING (Global TE at high k)
-                    # -----------------------------------------------------
-                    # 在实证与资源评估中我们确认：当 k>=5（尤其是 k=6，亦为 44/60 用户的最优 k），
-                    # Global TE 会在 8–12GB 级别 JVM 堆上发生 OOM。基于第 4 阶段的 k-Selection 诊断
-                    # （见 analysis/out/production_k6_true_cte_merged/k_selected_by_user_ALL.csv，73% 用户选到 k=6），
-                    # 我们接受 Global TE 在高 k 处的失败，并将其记录为 NaN：
-                    #   1) 这是有意为之的、可接受的结果（最终运行中 OOM≈73.3% 对应那 73% 需要 k=6 的用户）。
-                    #   2) 我们的核心方法 True CTE 能在 k=6 与 8GB 级内存下成功运行并产出结论，
-                    #      因而整体结论不受 Global TE 的高 k OOM 影响。
-                    # 下面的 try/except 块正是这种设计的实现：检测到高 k 的 OOM 后，记录 NaN 并继续流水线。
+                    # NOTE: Intentional OOM handling for Global TE at high k
+                    # ------------------------------------------------------
+                    # Empirically, when k>=5 (especially k=6, which 44/60 users select),
+                    # Global TE frequently OOMs with an 8–12GB JVM heap due to state space explosion.
+                    # Diagnostics (see analysis/out/production_k6_true_cte_merged/k_selected_by_user_ALL.csv)
+                    # show 73% of users select k=6 with AIS. We therefore accept Global TE failures at
+                    # high k and record the TE value as NaN by design:
+                    #   1) This is intentional and acceptable (overall OOM rate ≈73% matches k=6 selection rate).
+                    #   2) The core method (True CTE) successfully runs at k=6 within ~8–12GB, so conclusions are
+                    #      based on True CTE and are not impacted by Global TE OOM.
+                    # The try/except block below implements this policy: detect OOM at high k, record NaN, continue.
                     try:
                         self.current_stage = f'TE ({idx}/{len(self.config["taus"])})'
                         self.update_heartbeat(current_user=f"{user_id}/{feature_mode}", current_stage=self.current_stage)
@@ -831,7 +909,14 @@ class ProductionPipeline:
             })
     
     def run(self, user_list, feature_modes):
-        """Run pipeline for all users and feature modes."""
+        """
+        Run the pipeline for all users and feature modes.
+
+        @param {list[str]} user_list - UUIDs to process.
+        @param {list[str]} feature_modes - Modes to analyze.
+        @returns {None}
+        @post Kicks off JVM, writes run_info, and iterates through users.
+        """
         self.start_time = datetime.now()
         self.total_users = len(user_list) * len(feature_modes)
         
@@ -870,7 +955,12 @@ class ProductionPipeline:
         analysis.shutdown_jvm()
     
     def finalize(self):
-        """Apply FDR, save all outputs, generate final report."""
+        """
+        Apply FDR, persist all outputs, and generate final quality report.
+
+        @returns {None}
+        @post Output CSVs, run_info.yaml, and status.json reflect final state.
+        """
         # Convert to DataFrames
         df_te = pd.DataFrame(self.results['te'])
         df_cte = pd.DataFrame(self.results['cte'])
@@ -986,6 +1076,12 @@ class ProductionPipeline:
 
 
 def main():
+    """
+    CLI entry point for production pipeline.
+
+    @returns {None}
+    @post Runs the configured analysis and exits with appropriate code.
+    """
     import argparse
     
     parser = argparse.ArgumentParser(
@@ -1036,6 +1132,13 @@ Examples:
 
     # Resolve desired worker count
     def _parse_xmx_bytes(xmx_str: str) -> int:
+        """
+        Parse a JVM -Xmx string (e.g., '8g', '1024m') to bytes.
+
+        @param {str} xmx_str - Heap size string.
+        @returns {int} Equivalent number of bytes.
+        @post Returns a reasonable fallback on parsing failure.
+        """
         try:
             s = xmx_str.strip().lower()
             if s.endswith('g'):
@@ -1047,6 +1150,14 @@ Examples:
             return 8 * 1024**3  # Fallback 8 GiB
 
     def _resolve_workers(arg_workers, config):
+        """
+        Resolve desired worker count from CLI arg and config.
+
+        @param {str|int|None} arg_workers - Explicit count or 'auto' or None.
+        @param {dict} config - Configuration dictionary.
+        @returns {int} Number of workers to use.
+        @post Uses CPU count and estimated RAM heuristic when 'auto'.
+        """
         if arg_workers is None:
             return int(config.get('runtime', {}).get('concurrency', 1))
         if isinstance(arg_workers, str) and arg_workers.lower() == 'auto':
@@ -1116,10 +1227,27 @@ Examples:
     data_root = Path(pipeline.config['data_root'])
     files = glob.glob(str(data_root / '*.features_labels.csv'))
     all_uuids = sorted([Path(f).stem.replace('.features_labels', '') for f in files])
-    
-    # Get n_users from config or override
-    n_users = args.n_users if args.n_users else pipeline.config.get('n_users', len(all_uuids))
-    user_list = all_uuids[:n_users]
+
+    # Optional: override user list via a file of UUIDs (one per line)
+    user_list_file = pipeline.config.get('user_list_file')
+    user_list = None
+    if user_list_file:
+        try:
+            lines = [l.strip() for l in Path(user_list_file).read_text(encoding='utf-8').splitlines()]
+            desired = [u for u in lines if u and not u.startswith('#')]
+            # Preserve order, include only those present in data_root
+            user_list = [u for u in desired if u in all_uuids]
+            if not user_list:
+                logger.warning(f"USER LIST FILE provided but no valid UUIDs found: {user_list_file}")
+        except Exception as e:
+            logger.warning(f"Failed to read user_list_file '{user_list_file}': {e}")
+
+    # Get n_users from config or override (ignored if user_list_file provided)
+    if user_list is None:
+        n_users = args.n_users if args.n_users else pipeline.config.get('n_users', len(all_uuids))
+        user_list = all_uuids[:n_users]
+    else:
+        n_users = len(user_list)
     feature_modes = pipeline.config['feature_modes']
     
     logger.info(f"CONFIG: {n_users} users, {len(feature_modes)} modes, k_strategy={pipeline.config['k_selection']['strategy']}")

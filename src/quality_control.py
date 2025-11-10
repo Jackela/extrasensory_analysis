@@ -1,6 +1,11 @@
-# src/quality_control.py
-# Data quality validation and threshold enforcement
-# Centralizes all sample size requirements and quality checks
+"""
+Data quality validation and threshold enforcement.
+
+Centralizes sample size requirements and checks for TE/CTE/AIS/GC.
+Docstrings follow JSDoc-style with DbC notes.
+
+@module quality_control
+"""
 
 import logging
 import numpy as np
@@ -57,18 +62,23 @@ class KSelectionThresholds:
 
 class QualityController:
     """
-    Validates data quality against configurable thresholds.
-    
-    Centralizes all sample size requirements and quality checks
-    to ensure consistent enforcement across the analysis pipeline.
+    Validate data quality against configurable thresholds.
+
+    Centralizes sample size requirements and quality checks
+    to ensure consistent enforcement across the pipeline.
+
+    @param {Dict} config - Root configuration dictionary.
+    @invariant Thresholds are numeric and actions are valid enum values.
     """
     
     def __init__(self, config: Dict):
         """
         Initialize quality controller from config dictionary.
-        
-        Args:
-            config: Quality control configuration (from YAML)
+
+        @param {Dict} config - Quality control configuration (from YAML).
+        @returns {None}
+        @pre Config keys are optional; defaults applied when missing.
+        @post Instance has parsed thresholds and reporting settings.
         """
         qc = config.get('quality_control', {})
         

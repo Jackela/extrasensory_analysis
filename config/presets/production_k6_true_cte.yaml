@@ -1,11 +1,11 @@
-# FINAL RUN CONFIG (最终运行配置)
+# FINAL RUN CONFIG
 #
-# 本配置是项目的最终结果配置：
-# - 60 用户；AIS 选 k，最高至 k=6（诊断显示 73% 用户选到 k=6）
-# - 采用 True CTE 作为核心方法；保留 Global TE（其在 k>=5 处可能 OOM，按设计接受并记录为 NaN）
-# - 自适应置换阶段最多 10k；FDR 按 family×tau 纠正
+# This is the final production preset:
+# - 60 users; AIS k-selection up to k=6 (73% users select k=6 in diagnostics)
+# - True CTE is the core method; Global TE retained but allowed to OOM at k>=5 (record NaN and continue)
+# - Adaptive surrogate stages up to 10k; FDR corrected per (family × tau)
 #
-# Full production run: 60 users, AIS up to k=6, 10k surrogates with adaptive early stop, global TE + True CTE only
+# Full production run: 60 users, AIS up to k=6, 10k surrogates with adaptive early stop, Global TE + True CTE only
 
 data_root: "data/ExtraSensory.per_uuid_features_labels"
 out_dir: "analysis/out/production_k6_true_cte_<STAMP>"

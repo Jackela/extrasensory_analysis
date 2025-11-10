@@ -1,5 +1,11 @@
-# src/granger_analysis.py
-# Granger causality baseline analysis using statsmodels VAR
+"""
+Granger causality baseline analysis using statsmodels VAR.
+
+Provides a symmetric A↔S Granger test with basic lag selection
+and a delta based on -log10(p) differences.
+
+@module granger_analysis
+"""
 
 import logging
 import numpy as np
@@ -12,21 +18,16 @@ logger = logging.getLogger(__name__)
 
 def run_granger_causality(series_A: np.ndarray, series_S: np.ndarray, max_lag: int = 4) -> dict:
     """
-    Computes Granger causality test for A->S and S->A directions.
-    
-    Uses VAR model with lag selection via AIC/BIC.
-    
-    Args:
-        series_A: Activity time series (discrete or continuous)
-        series_S: Sitting time series (binary)
-        max_lag: Maximum lag to test
-        
-    Returns:
-        Dictionary with:
-        - gc_A_to_S_pval: p-value for A->S causality
-        - gc_S_to_A_pval: p-value for S->A causality
-        - gc_optimal_lag: Selected lag order
-        - gc_Delta: Difference in -log10(p-values) as analog to ΔTE
+    Compute Granger causality tests for A→S and S→A.
+
+    Uses VAR with lag order selection and reports p-values and a delta.
+
+    @param {np.ndarray} series_A - Activity series (discrete or continuous).
+    @param {np.ndarray} series_S - Sitting series (binary or discrete).
+    @param {int} max_lag - Maximum lag to test.
+    @returns {dict} {'gc_A_to_S_pval','gc_S_to_A_pval','gc_optimal_lag','gc_Delta'}
+    @pre len(series_A) == len(series_S) and sufficiently large for VAR.
+    @post Returns NaN entries on failure; logs warnings for insufficient data.
     """
     results = {}
     

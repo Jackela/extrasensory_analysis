@@ -1,6 +1,11 @@
-# src/settings.py
-# Infrastructure paths and ExtraSensory dataset schema constants.
-# All configuration parameters are in YAML config files (config/presets/).
+"""
+Infrastructure paths and ExtraSensory dataset schema constants.
+
+All adjustable parameters belong in YAML presets; this file contains
+dataset constants and integration paths only.
+
+@module settings
+"""
 
 import os
 

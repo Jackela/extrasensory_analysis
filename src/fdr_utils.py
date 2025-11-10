@@ -1,7 +1,10 @@
-"""Unified FDR correction utilities.
+"""
+Unified FDR correction utilities.
 
-Implements per-(family, tau) Benjamini-Hochberg FDR correction
+Implements per-(family, tau) Benjamini–Hochberg FDR correction
 with comprehensive p→q column generation.
+
+@module fdr_utils
 """
 import pandas as pd
 import numpy as np
@@ -21,19 +24,19 @@ def apply_fdr_per_family_tau(
     tau_values: List[int] = [1, 2],
     alpha: float = 0.05
 ) -> pd.DataFrame:
-    """Apply BH-FDR correction per (family, tau) with full p→q mapping.
-    
-    Args:
-        df: DataFrame with p-values
-        p_cols: List of p-value column names (e.g., ['p_A2S', 'p_S2A', 'p_Delta'])
-        q_cols: List of q-value column names (e.g., ['q_A2S', 'q_S2A', 'q_Delta'])
-        family: Method family name (TE, CTE, STE, GC)
-        tau_col: Column name for tau
-        tau_values: List of tau values to process
-        alpha: FDR significance level
-    
-    Returns:
-        DataFrame with q-value columns added
+    """
+    Apply BH-FDR correction per (family, tau) with full p→q mapping.
+
+    @param {pd.DataFrame} df - Input DataFrame with p-values.
+    @param {List[str]} p_cols - P-value column names.
+    @param {List[str]} q_cols - Q-value target column names.
+    @param {str} family - Method family name (TE, CTE, STE, GC).
+    @param {str} tau_col - Column containing tau values.
+    @param {List[int]} tau_values - Tau values to process.
+    @param {float} alpha - FDR significance level.
+    @returns {pd.DataFrame} DataFrame with q-value columns added.
+    @pre df contains the listed p-value columns when present; tau_col exists when per-tau.
+    @post q_cols exist in the returned DataFrame; NaN where insufficient data.
     """
     if len(df) == 0:
         return df
@@ -103,18 +106,18 @@ def compute_delta_pvalue(
     method: str = 'wilcoxon',
     alpha: float = 0.05
 ) -> Tuple[float, float]:
-    """Compute group-level p-value for Delta via Wilcoxon signed-rank test.
-    
-    Args:
-        df: DataFrame with Delta values
-        delta_col: Column name for Delta (e.g., 'Delta_TE')
-        p_delta_col: Column name to store p-value
-        q_delta_col: Column name to store q-value (optional)
-        method: Test method ('wilcoxon' or 'ttest')
-        alpha: Significance level
-    
-    Returns:
-        (group_median_delta, p_value)
+    """
+    Compute group-level p-value for Delta via Wilcoxon (or t-test).
+
+    @param {pd.DataFrame} df - DataFrame with Delta values.
+    @param {str} delta_col - Column name for Delta (e.g., 'Delta_TE').
+    @param {str} p_delta_col - Column name to store p-value.
+    @param {str|null} q_delta_col - Column name to store q-value (optional, not corrected here).
+    @param {str} method - 'wilcoxon' or 'ttest'.
+    @param {float} alpha - Significance level (unused here but kept for API).
+    @returns {[float,float]} (group_median_delta, p_value) or (median, NaN) on failure.
+    @pre delta_col exists and has at least one value.
+    @post Returns NaN p-value when insufficient data or failure occurs.
     """
     from scipy.stats import wilcoxon, ttest_1samp
     

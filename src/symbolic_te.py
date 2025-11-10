@@ -1,5 +1,11 @@
-# src/symbolic_te.py
-# Symbolic Transfer Entropy using ordinal pattern encoding
+"""
+Symbolic Transfer Entropy using ordinal pattern encoding.
+
+Encodes continuous series via Bandt–Pompe ordinal patterns, then
+computes discrete TE using JIDT.
+
+@module symbolic_te
+"""
 
 import logging
 import numpy as np
@@ -10,15 +16,15 @@ logger = logging.getLogger(__name__)
 
 def ordinal_pattern_encode(series: np.ndarray, dim: int = 3, delay: int = 1) -> np.ndarray:
     """
-    Encodes time series into ordinal patterns (Bandt-Pompe symbolization).
-    
-    Args:
-        series: Input time series (continuous)
-        dim: Embedding dimension (pattern length)
-        delay: Time delay between elements
-        
-    Returns:
-        Array of ordinal pattern indices (0 to dim!-1)
+    Encode a time series into ordinal patterns (Bandt–Pompe).
+
+    @param {np.ndarray} series - Input continuous time series.
+    @param {int} dim - Embedding dimension (pattern length).
+    @param {int} delay - Time delay between elements.
+    @returns {np.ndarray} Array of pattern indices in [0, dim!-1].
+    @throws {ValueError} If the series is too short for encoding.
+    @pre n - (dim-1)*delay >= 10.
+    @post Returns int array of length n_patterns.
     """
     n = len(series)
     n_patterns = n - (dim - 1) * delay
@@ -49,15 +55,17 @@ def ordinal_pattern_encode(series: np.ndarray, dim: int = 3, delay: int = 1) -> 
 def run_symbolic_te_analysis(series_A: np.ndarray, series_S: np.ndarray,
                               k_A: int, k_S: int, tau: int = 1, num_surrogates: int = 1000) -> dict:
     """
-    Computes Symbolic Transfer Entropy using JIDT adapter.
-    Returns harmonized Delta=A→S−S→A.
-    
-    Args:
-        series_A: Activity time series (continuous, will be symbolized)
-        series_S: Sitting time series (discrete, will be symbolized)
-        k_A: History length for A
-        k_S: History length for S
-        tau: Time delay parameter (default=1)
+    Compute Symbolic TE using JIDT after ordinal encoding.
+
+    @param {np.ndarray} series_A - Activity series (continuous).
+    @param {np.ndarray} series_S - Sitting series (discrete/continuous).
+    @param {int} k_A - History for A (symbolic).
+    @param {int} k_S - History for S (symbolic).
+    @param {int} tau - Delay parameter.
+    @param {int} num_surrogates - Surrogates for significance.
+    @returns {dict} {'STE(A->S)','p_ste(A->S)','STE(S->A)','p_ste(S->A)','Delta_STE'}
+    @pre Series are long enough for ordinal encoding; k symbolic parameters are small.
+    @post Returns NaN values on failure; logs errors.
     """
     from src.jidt_adapter import SymbolicTE
     from src.params import STEParams

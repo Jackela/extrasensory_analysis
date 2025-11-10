@@ -1,7 +1,11 @@
 #!/usr/bin/env python
-"""Schema validator for ExtraSensory analysis outputs.
+"""
+Schema validator for ExtraSensory analysis outputs.
 
 Validates per_user_* CSV files against contract v1.0 specification.
+Docstrings follow JSDoc-style with DbC notes.
+
+@module validate_outputs
 """
 import sys
 import pandas as pd
@@ -39,10 +43,14 @@ SCHEMAS = {
 
 
 def validate_file(filepath: Path, schema: Dict) -> Tuple[bool, List[str]]:
-    """Validate single CSV file against schema.
-    
-    Returns:
-        (is_valid, error_messages)
+    """
+    Validate a single CSV file against a schema.
+
+    @param {Path} filepath - CSV file to validate.
+    @param {Dict} schema - Schema dict with required/optional/types/constants.
+    @returns {[bool, List[str]]} (is_valid, error_messages).
+    @pre File exists and is a CSV; schema keys are present.
+    @post Returns error messages describing all detected issues.
     """
     errors = []
     
@@ -95,6 +103,12 @@ def validate_file(filepath: Path, schema: Dict) -> Tuple[bool, List[str]]:
 
 
 def main():
+    """
+    CLI entry point.
+
+    @returns {None}
+    @post Exits with code 0 on success; 1 on validation failure.
+    """
     import argparse
     
     parser = argparse.ArgumentParser(description="Validate ExtraSensory analysis outputs")

@@ -1,0 +1,44 @@
+# Appendix high-RAM TE-only run (English-only)
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/appendix_k6_high_ram_<STAMP>"
+
+# Only run Global TE for this appendix run
+analysis_modes: ["global_te"]
+
+# Restrict to a specific list of users (one UUID per line)
+user_list_file: "config/appendix_user_list.txt"
+
+# Features and delays
+feature_modes: ["composite"]
+hour_bins: 6
+taus: [1, 2]
+
+# K-selection (match main run search range)
+k_selection:
+  strategy: "AIS"
+  k_grid: [1, 2, 3, 4, 5, 6]
+  k_max: 6
+
+# Surrogates (reduced to 1k for appendix validation)
+surrogates: 1000
+
+# Disable adaptive surrogates
+statistical:
+  adaptive_surrogates:
+    enabled: false
+
+# FDR settings (minimal, TE only is used here)
+fdr:
+  families: ["TE"]
+  by_tau: true
+  alpha: 0.05
+
+# JVM memory for high-RAM appendix rerun
+jvm:
+  xms: "8g"
+  xmx: "16g"
+
+# Runtime controls
+runtime:
+  concurrency: 3

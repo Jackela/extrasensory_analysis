@@ -1,10 +1,11 @@
-
 # PROJECT_DOCS.md
 
-## 1. 项目概述 (Project Overview)
-本项目旨在分析和处理一个包含1053个多变量时间序列的数据集。该数据集来源于LMTS，并存储在 `database.pkl` 文件中。
+Archived notice: This document is not maintained and kept only for historical reference.
 
-## 2. 项目结构 (Project Structure)
+## 1. Project Overview
+This archive describes an exploratory collection of 1053 multivariate time series. The index and samples were sourced from LMTS and stored in `database.pkl`.
+
+## 2. Project Structure
 ```mermaid
 graph TD
     A[database.pkl] --> B[Python Scripts];
@@ -12,18 +13,18 @@ graph TD
     C --> D[Models];
 ```
 
-## 3. 核心组件与逻辑 (Core Components & Logic)
-### 数据结构
-- **`database.pkl`**: 包含一个Python字典。
-- **顶层字典**: `{ 'dataset_name': <inner_dict> }`
-- **内层字典**: `{{ 'data': <numpy.ndarray>, 'labels': <string> }}`
+## 3. Core Components & Logic
+### Data Structure
+- `database.pkl`: Python dictionary.
+- Top-level: `{ 'dataset_name': <inner_dict> }`
+- Inner dict: `{ 'data': <numpy.ndarray>, 'labels': <string> }`
 
-### 当前分析样本
-- **数据集名称**: `spatiotemporal_intermittency_ii_alpha-1-75_epsilon-0-3_M10_T100`
-- **数据形状 (变量数, 时间点数)**: `(10, 100)`
-- **标签**: `['synthetic', 'chaotic', 'logistic map', 'symmetric', 'nonlinear', 'spatiotemporal_intermittency_ii']`
+### Current Sample
+- Dataset name: `spatiotemporal_intermittency_ii_alpha-1-75_epsilon-0-3_M10_T100`
+- Shape (variables, time points): `(10, 100)`
+- Labels: `['synthetic', 'chaotic', 'logistic map', 'symmetric', 'nonlinear', 'spatiotemporal_intermittency_ii']`
 
-## 4. 交互与数据流 (Interaction & Data Flow)
+## 4. Interaction & Data Flow
 ```mermaid
 graph TD
     subgraph Data Loading
@@ -35,11 +36,11 @@ graph TD
     end
 ```
 
-## 5. 数据集普查分析 (Dataset Census Analysis)
-对全部 **1053** 个数据集的名称进行了分析，以了解其来源和构成。
+## 5. Dataset Census Analysis
+We analyzed names across all 1053 datasets to understand sources and composition.
 
-### 类别分布
-| 主要类别 (Main Category) | 数据集数量 (Count) |
+### Category Distribution
+| Main Category | Count |
 |---------------------------|--------------------|
 | oscillator | 83 |
 | LSST | 80 |
@@ -117,5 +118,6 @@ graph TD
 | sim17 | 1 |
 | sim25 | 1 |
 | sim1 | 1 |
-### 初步结论
-分析显示，该数据集主要由合成生成的数据（如 `lorenz`, `rossler`）和一些理论模型（如 `spatiotemporal_intermittency`）组成，而非来自真实世界的特定领域（如金融、医疗）。
+
+### Preliminary Conclusion
+The collection is primarily synthetic (e.g., `lorenz`, `rossler`) and theoretical (e.g., `spatiotemporal_intermittency`), rather than domain-specific real-world datasets (e.g., finance, healthcare).

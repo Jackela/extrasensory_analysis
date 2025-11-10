@@ -1,3 +1,25 @@
+<#
+.SYNOPSIS
+  Monitor shard output directories and log progress periodically.
+
+.DESCRIPTION
+  Scans shard directories matching a pattern, reads status.json where available,
+  and appends a one-line progress snapshot to a UTF-8 log file on each interval.
+  Exits when all shards report completion or continue until manually stopped.
+
+.PARAMETER Pattern
+  Glob pattern to find shard directories (default: analysis/out/*_shard*).
+
+.PARAMETER IntervalSeconds
+  Interval in seconds between scans (default: 1800).
+
+.PARAMETER LogPath
+  Path to the log file to append (default: monitor.log).
+
+.NOTES
+  Archived-style helper script; adjust to your environment as needed.
+#>
+
 param(
   [string]$Pattern = "analysis/out/*_shard*",
   [int]$IntervalSeconds = 1800,
@@ -44,4 +66,3 @@ while ($true) {
 }
 
 Write-Host "Monitoring complete."
-

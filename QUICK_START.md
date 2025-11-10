@@ -1,20 +1,23 @@
 # Quick Start Guide
 
-## TL;DR - Zero Hardcoding Execution
+## TL;DR
 
-**All configuration is preset-based. No hardcoded values.**
+All configuration is preset-based. No hardcoded values.
 
 ```bash
 # Fast validation (2 users, k=4, 2 minutes)
 python run_production.py smoke
 
-# Full k=6 analysis (60 users, 4-process parallel, 60 hours)
-./run_parallel_4shards.sh k6_full
+# Final run (True CTE, k up to 6; recommended)
+python run_production.py --config config/presets/production_k6_true_cte.yaml
+
+# Final run, 4-process parallel
+./run_parallel_4shards.sh production_k6_true_cte
 
 # Fast k≤4 analysis (60 users, 4 modes, 4 hours)
 python run_production.py k4_fast
 
-# High-resolution 24-bin CTE (60 users, 5 hours)
+# High-resolution 24-bin CTE (optional)
 python run_production.py 24bin_cte
 ```
 
@@ -23,9 +26,10 @@ python run_production.py 24bin_cte
 | Preset | Users | Modes | K | Runtime | Use Case |
 |--------|-------|-------|---|---------|----------|
 | **smoke** | 2 | 1 | k=4 (fixed) | 2 min | Validation |
-| **k6_full** | 60 | 1 | k≤6 (AIS) | 60h (parallel) | Scientific optimal |
-| **k4_fast** | 60 | 4 | k≤4 (guarded) | 4h | Fast comprehensive |
-| **24bin_cte** | 60 | 1 | k≤4 (guarded) | 5h | Fine temporal detail |
+| **production_k6_true_cte** | 60 | 1 | k≤6 (AIS) | ~60h (4-way parallel) | Final analysis |
+| **k6_full** | 60 | 1 | k≤6 (AIS) | ~60h (4-way parallel) | Uncapped baseline |
+| **k4_fast** | 60 | 4 | k≤4 (guarded) | ~4h | Fast comprehensive |
+| **24bin_cte** | 60 | 1 | k≤4 (guarded) | ~5h | Fine temporal detail |
 
 ## Execution Patterns
 
@@ -34,19 +38,19 @@ python run_production.py 24bin_cte
 python run_production.py smoke
 ```
 
-### 2. Production k=6 (Parallel Recommended)
+### 2. Final run (Parallel Recommended)
 ```bash
 # Linux/macOS/Git Bash
-./run_parallel_4shards.sh k6_full
+./run_parallel_4shards.sh production_k6_true_cte
 
 # Windows
-run_parallel_4shards.bat k6_full
+run_parallel_4shards.bat production_k6_true_cte
 ```
 
 ### 3. Single-Process Execution
 ```bash
-python run_production.py k6_full
-# 240 hours (not recommended, use parallel instead)
+python run_production.py --config config/presets/production_k6_true_cte.yaml
+# 200–240 hours (not recommended; use parallel)
 ```
 
 ### 4. Custom User Count
@@ -101,7 +105,8 @@ python run_production.py k6_full --shard 2/4 \
 
 All presets are in `config/presets/`:
 - `smoke.yaml` - Fast validation
-- `k6_full.yaml` - Pure AIS k=6
+- `production_k6_true_cte.yaml` - Final run (True CTE as core)
+- `k6_full.yaml` - Pure AIS k=6 (reference)
 - `k4_fast.yaml` - GUARDED_AIS k≤4
 - `24bin_cte.yaml` - 24-bin CTE
 

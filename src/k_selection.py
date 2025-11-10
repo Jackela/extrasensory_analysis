@@ -1,7 +1,11 @@
-"""K selection via Active Information Storage (AIS).
+"""
+K selection via Active Information Storage (AIS).
 
 Implements AIS-based selection of embedding dimension k per subject.
-AIS measures self-prediction: AIS_k = I(X_t; X_{t-1:t-k})
+AIS measures self-prediction: AIS_k = I(X_t; X_{t-1:t-k}).
+Contracts use JSDoc-style annotations with DbC elements.
+
+@module k_selection
 """
 import numpy as np
 import logging
@@ -13,16 +17,16 @@ logger = logging.getLogger(__name__)
 
 
 def compute_ais(series: np.ndarray, k: int, base: int, num_surrogates: int = 100) -> Tuple[float, float]:
-    """Compute Active Information Storage for given k.
-    
-    Args:
-        series: Discretized time series (int32)
-        k: History length
-        base: Alphabet size
-        num_surrogates: Number of surrogates for significance testing
-    
-    Returns:
-        (ais_value, p_value)
+    """
+    Compute Active Information Storage (AIS) for a given k.
+
+    @param {np.ndarray} series - Discretized time series (int32).
+    @param {int} k - History length.
+    @param {int} base - Alphabet size.
+    @param {int} num_surrogates - Surrogates for significance.
+    @returns {[float,float]} (ais_value, p_value) or (NaN, NaN) on failure.
+    @pre len(series) > 0 and k >= 1.
+    @post Returns finite values or NaN on errors.
     """
     try:
         # JIDT ActiveInformationCalculatorDiscrete
@@ -56,26 +60,19 @@ def select_k_via_ais(
     k_max: int = None,
     min_samples: int = None
 ) -> Dict[str, any]:
-    """Select optimal k via AIS across k_range with optional constraints.
-    
-    Args:
-        series: Discretized time series
-        base: Alphabet size
-        k_range: List of k values to test (e.g., [1,2,3,4,5,6])
-        num_surrogates: Surrogates for AIS significance
-        criterion: Selection criterion ('max_ais' or 'first_plateau')
-        k_max: Optional hard cap on k (for computational feasibility)
-        min_samples: Optional sample count for undersampling guard
-    
-    Returns:
-        {
-            'k_selected': int,
-            'k_original': int,  # Before constraints applied
-            'ais_values': {k: ais},
-            'p_values': {k: p},
-            'criterion': str,
-            'capped': bool
-        }
+    """
+    Select optimal k via AIS across k_range with optional constraints.
+
+    @param {np.ndarray} series - Discretized series.
+    @param {int} base - Alphabet size.
+    @param {list} k_range - k values to evaluate.
+    @param {int} num_surrogates - Surrogates for AIS significance.
+    @param {str} criterion - 'max_ais' or 'first_plateau'.
+    @param {int|null} k_max - Hard cap on k.
+    @param {int|null} min_samples - For undersampling guard (samples availability).
+    @returns {dict} {'k_selected','k_original','ais_values','p_values','criterion','capped'}
+    @pre k_range non-empty; base >= 2.
+    @post Returns a consistent selection record; may set 'capped' when adjusted.
     """
     ais_values = {}
     p_values = {}
