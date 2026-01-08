@@ -1,15 +1,16 @@
 """
-K selection via Active Information Storage (AIS).
+K selection utilities.
 
-Implements AIS-based selection of embedding dimension k per subject.
-AIS measures self-prediction: AIS_k = I(X_t; X_{t-1:t-k}).
-Contracts use JSDoc-style annotations with DbC elements.
+Provides:
+- AIS-based selection for discrete series (legacy)
+- Ragwitz criterion selection for continuous series
 
 @module k_selection
 """
 import numpy as np
 import logging
 from typing import Tuple, Dict
+from sklearn.neighbors import NearestNeighbors
 import jpype
 from jpype.types import JArray, JInt
 
@@ -136,3 +137,60 @@ def select_k_via_ais(
         'criterion': criterion,
         'capped': capped
     }
+
+
+def select_k_via_ragwitz(
+    series: np.ndarray,
+    k_range: list,
+    tau: int = 1,
+    n_neighbors: int = 1,
+    max_samples: int = 20000,
+) -> Dict[str, any]:
+    """
+    Select embedding dimension k for a continuous series using a Ragwitz-style criterion.
+
+    Heuristic implementation: choose k minimizing 1-step prediction MSE via nearest-neighbor prediction
+    in the delay-embedded space (delay=tau).
+
+    @param series {np.ndarray} Continuous series (float64)
+    @param k_range {list[int]} Candidate k values
+    @param tau {int} Delay between lags (default 1)
+    @param n_neighbors {int} Number of neighbors (default 1 for local-constant)
+    @param max_samples {int} Optional cap for computational cost
+    @returns {dict} {'k_selected','mse':{k:mse}}
+    """
+    x = np.asarray(series, dtype=float)
+    n = len(x)
+    if n < (max(k_range) + 2) * tau + 1:
+        # Too short; fallback
+        return {'k_selected': k_range[0], 'mse': {}}
+
+    # Optionally subsample to limit cost
+    if n > max_samples:
+        idx = np.linspace(0, n - 1, max_samples).astype(int)
+        x = x[idx]
+        n = len(x)
+
+    mse_map: Dict[int, float] = {}
+    for k in k_range:
+        # Build embedded vectors X_t = [x_t, x_{t-tau}, ..., x_{t-(k-1)tau}]
+        T = n - (k * tau + tau)  # ensure future at t+tau exists
+        if T <= 1:
+            mse_map[k] = np.inf
+            continue
+        embed = np.stack([x[(k-1-i)*tau : (k-1-i)*tau + T] for i in range(k)], axis=1)
+        target_future = x[k*tau + tau : k*tau + tau + T]
+
+        # Nearest neighbor in embedded space (exclude self)
+        nn = NearestNeighbors(n_neighbors=min(n_neighbors + 1, len(embed)), algorithm='auto')
+        nn.fit(embed)
+        dists, idxs = nn.kneighbors(embed, return_distance=True)
+        # Use first non-self neighbor
+        nn_idx = idxs[:, 1] if idxs.shape[1] > 1 else idxs[:, 0]
+        pred = target_future[nn_idx]
+        mse = float(np.mean((pred - target_future) ** 2))
+        mse_map[k] = mse
+
+    # Select k with minimal MSE (ties -> smallest k)
+    k_selected = sorted(mse_map.items(), key=lambda kv: (kv[1], kv[0]))[0][0]
+    return {'k_selected': int(k_selected), 'mse': mse_map}

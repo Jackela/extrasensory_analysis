@@ -15,7 +15,7 @@ import numpy as np
 import jpype
 from jpype.types import JArray, JInt
 from typing import Tuple, Optional
-from src.params import TEParams, CTEParams, STEParams
+from src.params import TEParams, CTEParams, STEParams, CTEKraskovParams
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,75 @@ def java_array_int(py_array: np.ndarray) -> JArray:
     if py_array.dtype != np.int32:
         py_array = py_array.astype(np.int32)
     return JArray(JInt)(py_array)
+
+
+def _compute_cte_value_only(source: np.ndarray, dest: np.ndarray, cond: np.ndarray, params: CTEParams) -> float:
+    """
+    Compute CTE value once (no internal significance), with safe truncation.
+    """
+    # Validate inputs against their native bases
+    source = validate_series(source, params.base_source, "source")
+    dest = validate_series(dest, params.base_dest, "dest")
+    cond = validate_series(cond, params.base_cond, "cond")
+
+    if not (len(source) == len(dest) == len(cond)):
+        raise ValueError(f"Length mismatch: source={len(source)}, dest={len(dest)}, cond={len(cond)}")
+
+    # Apply data-level lag for tau>1
+    tau = int(params.tau)
+    if tau > 1:
+        source = source[:-tau]
+        dest = dest[tau:]
+        cond = cond[tau:]
+
+    # Safe truncation for block permutation compatibility
+    k_hist = int(params.k_dest)
+    block = 24
+    n_full = int(len(source))
+    n_eff = max(0, n_full - k_hist)
+    num_safe_blocks = n_eff // block
+    n_eff_safe = num_safe_blocks * block
+    n_total_safe = n_eff_safe + k_hist
+    if num_safe_blocks >= 1 and n_total_safe <= n_full:
+        safe_source = source[:n_total_safe]
+        safe_dest = dest[:n_total_safe]
+        safe_cond = cond[:n_total_safe]
+    else:
+        safe_source, safe_dest, safe_cond = source, dest, cond
+
+    # Initialise CTE calculator (discrete) and compute value
+    CTECalc = jpype.JClass("infodynamics.measures.discrete.ConditionalTransferEntropyCalculatorDiscrete")
+    calc = CTECalc()
+    base_main = int(max(params.base_source, params.base_dest))
+    calc.initialise(base_main, int(params.k_dest), 1, int(params.base_cond))
+
+    j_source = java_array_int(safe_source)
+    j_dest = java_array_int(safe_dest)
+    j_cond = java_array_int(safe_cond)
+    calc.addObservations(j_source, j_dest, j_cond)
+
+    try:
+        return float(calc.computeAverageLocalOfObservations())
+    except Exception as e:
+        logger.error(f"CTE value computation failed: {e}")
+        return float('nan')
+
+
+def _block_permute_source(source: np.ndarray, k_hist: int, block: int, rng: np.random.Generator) -> np.ndarray:
+    """
+    Block-permute the source array after the first k_hist samples, with block size 'block'.
+    Keeps the first k_hist elements in place to preserve initial history alignment.
+    Assumes the caller has already truncated length so that (len(source)-k_hist) is a multiple of block.
+    """
+    n = len(source)
+    if n <= k_hist:
+        return source.copy()
+    tail = source[k_hist:]
+    # Split tail into contiguous blocks of equal size
+    blocks = [tail[i:i+block] for i in range(0, len(tail), block)]
+    order = rng.permutation(len(blocks))
+    shuffled_tail = np.concatenate([blocks[i] for i in order]) if blocks else tail
+    return np.concatenate([source[:k_hist], shuffled_tail])
 
 
 class DiscreteTE:
@@ -283,77 +352,129 @@ def compute_true_cte(source: np.ndarray, dest: np.ndarray, cond: np.ndarray, par
           hence k_A is effectively tied to k_S. Callers should ensure k_A == k_S for consistency.
     """
     try:
-        # Validate inputs against their native bases
-        source = validate_series(source, params.base_source, "source")
-        dest = validate_series(dest, params.base_dest, "dest")
-        cond = validate_series(cond, params.base_cond, "cond")
+        # Manual non-causal offset per expert plan (tau = -1 semantics):
+        # source_A_noncausal = source_A[2:]
+        # dest_S_noncausal = dest_S[:-2]
+        # condition_H_noncausal = condition_H[:-2]
+        k_hist = int(params.k_dest)
+        s_full = validate_series(source, params.base_source, "source")
+        d_full = validate_series(dest, params.base_dest, "dest")
+        c_full = validate_series(cond, params.base_cond, "cond")
+        s_nc = s_full[k_hist:]
+        d_nc = d_full[:-k_hist]
+        c_nc = c_full[:-k_hist]
 
-        if not (len(source) == len(dest) == len(cond)):
-            raise ValueError(f"Length mismatch: source={len(source)}, dest={len(dest)}, cond={len(cond)}")
+        # Compute TE_actual on non-causal arrays
+        te_actual = _compute_cte_value_only(s_nc, d_nc, c_nc, params)
 
-        # Set bases according to JIDT's required initialise signature
-        # base = max(base_A, base_S); base_others = base_H
-        base_main = int(max(params.base_source, params.base_dest))
-        base_others = int(params.base_cond)
+        # Prepare non-causal arrays for surrogate generation and safe truncation
+        s = s_nc
+        d = d_nc
+        c = c_nc
+        block = 24
+        block = 24
+        n_full = int(len(s))
+        n_eff = max(0, n_full - k_hist)
+        num_safe_blocks = n_eff // block
+        n_eff_safe = num_safe_blocks * block
+        n_total_safe = n_eff_safe + k_hist
+        if num_safe_blocks >= 1 and n_total_safe <= n_full:
+            safe_s = s[:n_total_safe]
+            safe_d = d[:n_total_safe]
+            safe_c = c[:n_total_safe]
+        else:
+            safe_s, safe_d, safe_c = s, d, c
 
-        # Construct calculator
-        CTECalc = jpype.JClass("infodynamics.measures.discrete.ConditionalTransferEntropyCalculatorDiscrete")
-        calc = CTECalc()
+        # Surrogate loop: block-permute source only
+        # Fixed number of surrogates per expert plan
+        M = 1000
+        rng = np.random.default_rng(42)
+        te_surrogates = np.empty(M, dtype=float)
+        for i in range(M):
+            shuf_s = _block_permute_source(safe_s, k_hist=k_hist, block=block, rng=rng)
+            te_i = _compute_cte_value_only(shuf_s, safe_d, safe_c, params)
+            te_surrogates[i] = te_i
 
-        # JIDT Discrete CTE uses 4-arg initialise(base, history=k_S, numOtherInfoContributors=1, base_others)
-        # It assumes source and conditional are taken at r-1 (i.e., tau=1). For tau>1 we apply data-level lag.
-        if int(params.tau) > 1:
-            tau = int(params.tau)
-            source = source[:-tau]
-            dest = dest[tau:]
-            cond = cond[tau:]
+        # Right-tailed p-value
+        if np.isnan(te_actual):
+            p_value = float('nan')
+        else:
+            ge = int(np.sum(te_surrogates >= te_actual))
+            p_value = float((ge + 1) / (M + 1))
 
-        calc.initialise(
-            base_main,
-            int(params.k_dest),  # k_S (destination history)
-            1,            # single conditional variable
-            base_others   # base for conditionals (hour bins)
-        )
+        return (te_actual if np.isfinite(te_actual) else np.nan,
+                p_value if np.isfinite(p_value) else np.nan)
+    except Exception as e:
+        logger.error(f"TrueCTE.compute failed: {e}")
+        return (np.nan, np.nan)
+    finally:
+        gc.collect()
 
-        # Add observations (must be Java int[]); order is (source, dest, cond)
-        j_source = java_array_int(source)
-        j_dest = java_array_int(dest)
-        j_cond = java_array_int(cond)
-        calc.addObservations(j_source, j_dest, j_cond)
 
-        # Compute CTE value (separate from significance so failures in significance don't drop value)
+def compute_true_cte_kraskov(source: np.ndarray, dest: np.ndarray, cond: np.ndarray, params: CTEKraskovParams) -> Tuple[float, float]:
+    """
+    Compute Conditional Transfer Entropy using JIDT Kraskov continuous estimator.
+
+    This requires JIDT class: infodynamics.measures.continuous.kraskov.ConditionalTransferEntropyCalculatorKraskov
+
+    @param source {np.ndarray} float64
+    @param dest {np.ndarray} float64
+    @param cond {np.ndarray} float64 (e.g., hour bin as numeric)
+    @returns (cte_value, p_value)
+    """
+    try:
+        # Validate numeric arrays
+        s = np.asarray(source, dtype=float)
+        d = np.asarray(dest, dtype=float)
+        c = np.asarray(cond, dtype=float)
+        if not (len(s) == len(d) == len(c)):
+            raise ValueError(f"Length mismatch: source={len(s)}, dest={len(d)}, cond={len(c)}")
+
+        # Data-level lag for tau>1
+        tau = int(params.tau)
+        if tau > 1:
+            s = s[:-tau]
+            d = d[tau:]
+            c = c[tau:]
+
+        CTEClass = jpype.JClass("infodynamics.measures.continuous.kraskov.ConditionalTransferEntropyCalculatorKraskov")
+        calc = CTEClass()
+        # Set neighbors if supported
+        try:
+            calc.setProperty("k", str(int(params.k_nn)))
+        except Exception:
+            pass
+
+        # Initialise with histories and delay
+        calc.initialise(int(params.k_dest), int(params.k_source), tau)
+
+        # Add observations (continuous)
+        # Some JIDT versions expect cond as 1-D double[]; others support multiple via 2D
+        try:
+            calc.addObservations(s.tolist(), d.tolist(), c.tolist())
+        except Exception:
+            # Fallback: pass cond as a 2D array with one column
+            calc.addObservations(s.tolist(), d.tolist(), [c.tolist()])
+
+        # Compute value
         cte_value = float('nan')
         try:
             cte_value = float(calc.computeAverageLocalOfObservations())
         except Exception as e:
-            logger.error(f"TrueCTE.value failed: {e}")
-            cte_value = float('nan')
+            logger.error(f"Kraskov TrueCTE value failed: {e}")
 
-        # Significance testing (best-effort)
+        # Significance if available
         p_value = float('nan')
         try:
-            if params.adaptive_stages and len(params.adaptive_stages) > 0:
-                last_p = float('nan')
-                for n_surr in params.adaptive_stages:
-                    md = calc.computeSignificance(int(n_surr))
-                    last_p = float(md.pValue)
-                    if params.early_stop_sig is not None and last_p <= params.early_stop_sig:
-                        break
-                    if params.early_stop_nonsig is not None and last_p >= params.early_stop_nonsig:
-                        break
-                p_value = last_p
-            else:
-                md = calc.computeSignificance(int(params.num_surrogates))
-                p_value = float(md.pValue)
+            md = calc.computeSignificance(int(params.num_surrogates))
+            p_value = float(md.pValue)
         except Exception as e:
-            # Keep the CTE value but fall back to NaN p-value on significance failure
-            logger.error(f"TrueCTE.significance failed: {e}")
-            p_value = float('nan')
+            logger.warning(f"Kraskov TrueCTE significance not available/failed: {e}")
 
         return (cte_value if np.isfinite(cte_value) else np.nan,
                 p_value if np.isfinite(p_value) else np.nan)
     except Exception as e:
-        logger.error(f"TrueCTE.compute failed: {e}")
+        logger.error(f"TrueCTE(Kraskov).compute failed: {e}")
         return (np.nan, np.nan)
     finally:
         gc.collect()

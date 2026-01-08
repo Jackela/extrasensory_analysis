@@ -123,137 +123,71 @@ def create_composite_feature(df: pd.DataFrame, mode: str = 'composite') -> np.nd
 def create_variables(
     df: pd.DataFrame,
     feature_mode: str = 'composite',
-    hour_bins: int = None,
+    hour_bins: int = 6,
     a_bins: int = 5,
     s_mode: str = 'binary'
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Construct aligned variables A, S, H_raw, H_binned from input dataframe.
+    Construct aligned variables A, S, H_raw, H_binned from input dataframe (Discrete path).
 
-    - A: z-scored activity feature → quantile discretized into `a_bins` bins (0..a_bins-1)
-    - S: sitting label (binary). Other modes may be added in future.
+    - A: z-scored composite feature → 5-quantile discretization → int in {0,1,2,3,4}
+    - S: binary sitting label → int in {0,1}
     - H_raw: hour-of-day (0..23)
-    - H_binned: hour-of-day binned into `hour_bins`
-
-    @param {pd.DataFrame} df - Input dataframe.
-    @param {str} feature_mode - Feature engineering mode.
-    @param {int} hour_bins - Number of bins for H_binned (required).
-    @param {int} a_bins - Number of quantile bins for A (default: 5).
-    @param {str} s_mode - 'binary' (default). Placeholder for future S discretizations.
-    @returns {(np.ndarray,np.ndarray,np.ndarray,np.ndarray)} A,S,H_raw,H_binned integer arrays.
-    @throws {ValueError} If required columns missing or insufficient data.
-    @pre hour_bins >= 1 and df contains COL_SITTING and feature columns.
-    @post All returned arrays are aligned and equal length.
+    - H_binned: 6-bin hour-of-day (4-hour chunks) → int in {0,1,2,3,4,5}
     """
-    
     if hour_bins is None:
-        raise ValueError("hour_bins is required and must be passed from config file")
-    if not isinstance(a_bins, int) or a_bins < 1:
-        raise ValueError(f"a_bins must be int >= 1, got {a_bins}")
-    if s_mode not in ('binary', 'quantile3'):
-        # Supported modes: 'binary' (raw label) and 'quantile3' (rolling-mean proxy discretized into 3 quantiles)
-        raise NotImplementedError(f"s_mode '{s_mode}' is not implemented; supported: 'binary', 'quantile3'")
+        hour_bins = 6
+    if hour_bins != 6:
+        # Enforce the plan's 6-bin requirement
+        hour_bins = 6
+    if a_bins != 5:
+        a_bins = 5
+    if s_mode != 'binary':
+        raise NotImplementedError("Only binary S is supported in the constrained discrete pipeline")
 
-    # --- Input Validation ---
-    required_cols = [settings.COL_SITTING]
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        raise ValueError(f"Missing required columns: {', '.join(missing_cols)}")
+    # Validate required columns
+    if settings.COL_SITTING not in df.columns:
+        raise ValueError(f"Missing required column: {settings.COL_SITTING}")
 
-    # 1. Variable S (Sitting): Binary label or 3-quantile discretized proxy
-    series_S = df[settings.COL_SITTING].copy()
-    # Handle potential NaNs in label column (fill with 0, assuming NaN means not sitting)
-    series_S = series_S.fillna(0)
-    
-    if s_mode == 'quantile3':
-        # Derive a continuous-like proxy via centered 5-sample rolling mean
-        # (Used as recent fraction-of-time sitting), then 3-quantile discretize
-        s_proxy = series_S.rolling(window=5, center=True, min_periods=1).mean()
-        # Temporarily place in dataframe for alignment with A/H later on
-        series_S_quant = s_proxy
+    # S (binary)
+    series_S = df[settings.COL_SITTING].fillna(0).astype(int)
 
-    # 2. Variable A (Activity): Use composite feature based on mode
-    continuous_A = create_composite_feature(df, mode=feature_mode)
+    # A (composite -> z-score -> 5-quantile discretization)
+    A_cont = create_composite_feature(df, mode=feature_mode).astype(float)
+    zA = zscore(A_cont, nan_policy='omit')
 
-    # 3. Variable H (Hour of Day): From timestamp index
+    # H (hour of day) → 6-bin
     timestamps = pd.to_datetime(df.index, unit='s')
-    series_H = timestamps.hour.astype(int)
+    H_raw = timestamps.hour.astype(int)
+    # Build preliminary frame to drop NaNs in zA before discretization
+    prelim = pd.DataFrame({'A_z': zA, 'S': series_S.values, 'H_raw': H_raw.values})
+    prelim = prelim.dropna(subset=['A_z'])
 
-    # 4. Align, Clean, and Package
-    aligned_df = pd.DataFrame({
-        'S': series_S if s_mode == 'binary' else series_S_quant,
-        'A_cont': continuous_A,
-        'H': series_H
-    })
-
-    # Drop rows where the *continuous activity measure* is missing,
-    # as this is essential before standardization/discretization.
-    aligned_df = aligned_df.dropna(subset=['A_cont'])
-
-    # Ensure sufficient data after dropping NaNs
-    if len(aligned_df) < 200:
-        raise ValueError(f"Insufficient data (N={len(aligned_df)}) after cleaning NaNs from activity column.")
-
-    # 5. Final Preprocessing for Variable A (Revised Method)
-
-    # Step 1: Z-score normalization *within subject* (Proposal Req: 15)
-    # Apply to the cleaned continuous data
-    zscored_A = zscore(aligned_df['A_cont'])
-
-    # Step 2: Quantile Discretization (Proposal Req: 16, 17)
-    # Use KBinsDiscretizer for equal-frequency bins (quantiles)
+    # Discretize A on cleaned rows only
+    reshaped = prelim['A_z'].to_numpy().reshape(-1, 1)
     discretizer = KBinsDiscretizer(n_bins=a_bins, encode='ordinal', strategy='quantile')
-
-    # Reshape for the discretizer
-    reshaped_A = zscored_A.reshape(-1, 1)
-
-    # Apply discretization, suppressing potential warnings about bin edges
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        # Ensure output is integer and flattened
-        final_A = discretizer.fit_transform(reshaped_A).astype(int).flatten()
-    # Defensive clamp to [0, a_bins-1] to avoid boundary rounding issues
-    final_A = np.clip(final_A, 0, a_bins - 1)
+        a_disc = discretizer.fit_transform(reshaped).astype(int).flatten()
+    a_disc = np.clip(a_disc, 0, a_bins - 1)
 
-    # Final check on discretization output
-    if np.max(final_A) == 0 and len(np.unique(final_A)) == 1:
-        # Check if the original data had zero variance before concluding failure
-        if aligned_df['A_cont'].nunique() > 1:
-            raise ValueError("Discretization failed; resulted in only one bin despite variance in input.")
-        else:
-            # If input truly had no variance, discretization to one bin is expected but maybe not useful
-            raise ValueError("Input data for activity has zero variance, cannot discretize meaningfully.")
-
-    # 6. Get final, aligned, integer arrays
-    if s_mode == 'binary':
-        final_S = aligned_df['S'].values.astype(int)
-    else:
-        # Discretize the proxy into 3 equal-frequency bins (quantiles)
-        s_discretizer = KBinsDiscretizer(n_bins=3, encode='ordinal', strategy='quantile')
-        s_vals = aligned_df['S'].astype(float).to_numpy().reshape(-1, 1)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            final_S = s_discretizer.fit_transform(s_vals).astype(int).flatten()
-        # Defensive clamp to [0, 2] for 3-quantile discretization
-        final_S = np.clip(final_S, 0, 2)
-    final_H_raw = aligned_df['H'].values.astype(int)
-    if hour_bins < 1:
-        raise ValueError(f"hour_bins must be >= 1, got {hour_bins}")
-
+    # H 6-bin on cleaned rows
     bin_edges = np.linspace(0, 24, hour_bins + 1)
-    series_H_binned = pd.cut(
-        aligned_df['H'],
-        bins=bin_edges,
-        right=False,
-        labels=False,
-        include_lowest=True
-    ).astype(int)
+    h_binned = pd.cut(prelim['H_raw'], bins=bin_edges, right=False, labels=False, include_lowest=True).astype(int)
 
-    final_H_binned = series_H_binned.values.astype(int)
+    aligned = pd.DataFrame({
+        'A': a_disc,
+        'S': prelim['S'].astype(int).to_numpy(),
+        'H_raw': prelim['H_raw'].astype(int).to_numpy(),
+        'H_bin': h_binned.to_numpy().astype(int)
+    })
+    aligned = aligned.dropna()
+    if len(aligned) < 200:
+        raise ValueError(f"Insufficient data (N={len(aligned)}) after preprocessing.")
 
-    # Ensure all arrays have the same length after processing
-    assert len(final_A) == len(final_S) == len(final_H_raw) == len(final_H_binned), (
-        "Array lengths do not match after processing!"
-    )
-
-    return final_A, final_S, final_H_raw, final_H_binned
+    A_final = aligned['A'].to_numpy().astype(int)
+    S_final = aligned['S'].to_numpy().astype(int)
+    H_raw_final = aligned['H_raw'].to_numpy().astype(int)
+    H_binned_final = aligned['H_bin'].to_numpy().astype(int)
+    assert len(A_final) == len(S_final) == len(H_raw_final) == len(H_binned_final)
+    return A_final, S_final, H_raw_final, H_binned_final

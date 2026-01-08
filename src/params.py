@@ -89,3 +89,22 @@ class STEParams:
     tau: int = 1
     num_surrogates: int = 1000
     seed: Optional[int] = None
+
+@dataclass
+class CTEKraskovParams:
+    """
+    Continuous (Kraskov) Conditional Transfer Entropy parameters.
+
+    @property k_source {int} History for source.
+    @property k_dest {int} History for destination.
+    @property tau {int} Delay parameter.
+    @property k_nn {int} Nearest neighbors for Kraskov estimator.
+    @property num_surrogates {int} Surrogates for significance (if supported).
+    @property seed {Optional[int]} RNG seed.
+    """
+    k_source: int
+    k_dest: int
+    tau: int = 1
+    k_nn: int = 4
+    num_surrogates: int = 1000
+    seed: Optional[int] = None

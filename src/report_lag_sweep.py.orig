@@ -1,0 +1,59 @@
+"""
+Reporting for lag sweep: aggregate means per tau and plot curves.
+
+Input: per_user_lag_sweep_FINAL.csv (from src/run_lag_sweep.py)
+Output: fig_lag_sweep_curves.png in the same directory
+"""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+def main():
+    ap = argparse.ArgumentParser(description='Report lag sweep results (means per tau and curves).')
+    ap.add_argument('--csv', required=True, help='Path to per_user_lag_sweep_FINAL.csv')
+    args = ap.parse_args()
+
+    p = Path(args.csv)
+    df = pd.read_csv(p)
+    # Ensure numeric
+    df['tau'] = pd.to_numeric(df['tau'], errors='coerce')
+    df['TE_A_to_S'] = pd.to_numeric(df['TE_A_to_S'], errors='coerce')
+    df['TE_S_to_A'] = pd.to_numeric(df['TE_S_to_A'], errors='coerce')
+
+    # Aggregate means per tau
+    means = df.groupby('tau', as_index=False).agg(
+        mean_A2S=('TE_A_to_S', 'mean'),
+        mean_S2A=('TE_S_to_A', 'mean'),
+        n=('user_id', 'count'),
+    ).sort_values('tau')
+
+    # Print a text table
+    print('Lag sweep means (bits):')
+    for _, r in means.iterrows():
+        print(f"tau={int(r['tau']):2d}  mean_A2S={r['mean_A2S']:.6f}  mean_S2A={r['mean_S2A']:.6f}  n={int(r['n'])}")
+
+    # Plot curves
+    out_png = p.parent / 'fig_lag_sweep_curves.png'
+    plt.figure(figsize=(7, 4.2))
+    plt.plot(means['tau'], means['mean_A2S'], '-o', color='#4C78A8', label='TE(A→S|H)')
+    plt.plot(means['tau'], means['mean_S2A'], '-o', color='#E45756', label='TE(S→A|H)')
+    plt.axhline(0.0, color='#777', ls=':', lw=1)
+    plt.xlabel('tau (samples)')
+    plt.ylabel('TE (bits)')
+    plt.title('Lag sweep: mean TE vs tau (N=60)')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=300)
+    plt.close()
+    print(f"Saved: {out_png}")
+
+
+if __name__ == '__main__':
+    main()
+
+

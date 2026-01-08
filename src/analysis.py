@@ -95,7 +95,10 @@ def get_jidt_classes() -> dict:
             _jidt_classes = {
                 "AIS": jpype.JClass("infodynamics.measures.discrete.ActiveInformationCalculatorDiscrete"),
                 "TE": jpype.JClass("infodynamics.measures.discrete.TransferEntropyCalculatorDiscrete"),
-                "CTE": jpype.JClass("infodynamics.measures.discrete.ConditionalTransferEntropyCalculatorDiscrete")
+                "CTE": jpype.JClass("infodynamics.measures.discrete.ConditionalTransferEntropyCalculatorDiscrete"),
+                # Optional continuous (Kraskov) calculators
+                "KTE": jpype.JClass("infodynamics.measures.continuous.kraskov.TransferEntropyCalculatorKraskov"),
+                "KCTE": jpype.JClass("infodynamics.measures.continuous.kraskov.ConditionalTransferEntropyCalculatorKraskov"),
             }
         except Exception as e:
             logger.error(
@@ -264,6 +267,48 @@ def run_te_analysis(series_A: np.ndarray, series_S: np.ndarray,
     else:
         results['Delta_TE'] = np.nan
     
+    gc.collect()
+    return results
+
+
+def run_true_cte_analysis_continuous(series_A: np.ndarray, series_S: np.ndarray, series_cond: np.ndarray,
+                                     k_A: int, k_S: int,
+                                     tau: int = 1, k_nn: int = 4, num_surrogates: int = 1000) -> dict:
+    """
+    Continuous (Kraskov) Conditional Transfer Entropy in both directions with Delta.
+
+    @returns {'CTE_true(A->S|H)','p_true_cte(A->S|H)', 'CTE_true(S->A|H)','p_true_cte(S->A|H)', 'Delta_CTE_true'}
+    """
+    from src.jidt_adapter import compute_true_cte_kraskov
+    from src.params import CTEKraskovParams
+    import gc
+
+    results = {}
+    try:
+        params_A2S = CTEKraskovParams(k_source=int(k_A), k_dest=int(k_S), tau=int(tau), k_nn=int(k_nn), num_surrogates=int(num_surrogates))
+        cte_A2S, p_A2S = compute_true_cte_kraskov(series_A, series_S, series_cond, params_A2S)
+        results['CTE_true(A->S|H)'] = cte_A2S
+        results['p_true_cte(A->S|H)'] = p_A2S
+    except Exception as e:
+        logger.error(f"Kraskov True CTE(A->S|H) failed: {e}")
+        results['CTE_true(A->S|H)'] = np.nan
+        results['p_true_cte(A->S|H)'] = np.nan
+
+    try:
+        params_S2A = CTEKraskovParams(k_source=int(k_S), k_dest=int(k_A), tau=int(tau), k_nn=int(k_nn), num_surrogates=int(num_surrogates))
+        cte_S2A, p_S2A = compute_true_cte_kraskov(series_S, series_A, series_cond, params_S2A)
+        results['CTE_true(S->A|H)'] = cte_S2A
+        results['p_true_cte(S->A|H)'] = p_S2A
+    except Exception as e:
+        logger.error(f"Kraskov True CTE(S->A|H) failed: {e}")
+        results['CTE_true(S->A|H)'] = np.nan
+        results['p_true_cte(S->A|H)'] = np.nan
+
+    if np.isfinite(results.get('CTE_true(A->S|H)', np.nan)) and np.isfinite(results.get('CTE_true(S->A|H)', np.nan)):
+        results['Delta_CTE_true'] = float(results['CTE_true(A->S|H)'] - results['CTE_true(S->A|H)'])
+    else:
+        results['Delta_CTE_true'] = np.nan
+
     gc.collect()
     return results
 

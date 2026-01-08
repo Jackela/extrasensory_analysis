@@ -1,0 +1,26 @@
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/sanity_tau_neg1_<STAMP>"
+
+n_users: 60
+feature_modes: [composite]
+
+# Discrete path settings
+hour_bins: 6
+taus: [1]  # Keep tau loop at 1; DELAY property controls lag=-1 internally
+
+# K selection (unused by runner for discrete fixed k,l, but kept for completeness)
+k_selection:
+  strategy: "FIXED"
+  k_fixed: 2
+
+# Surrogates count for manual block permutation
+surrogates: 1000
+
+runtime:
+  concurrency: 4
+  checkpoint: true
+  heartbeat_interval: 60
+
+analysis_modes: [true_cte]
+
+schema_version: "v1.0"

@@ -1,3 +1,1228 @@
+## File: src/jidt_adapter.py
+```python
+"""
+JIDT adapters for discrete TE/CTE and symbolic TE.
+
+This module provides thin wrappers around JIDT calculators with explicit
+contract-style docstrings and English-only documentation. It implements:
+- Discrete TE with delay (tau) via 6-arg initialise
+- True (conditional) TE using ConditionalTransferEntropyCalculatorDiscrete
+- Symbolic TE via ordinal pattern encoding
+
+@module jidt_adapter
+"""
+import logging
+import gc
+import numpy as np
+import jpype
+from jpype.types import JArray, JInt
+from typing import Tuple, Optional
+from src.params import TEParams, CTEParams, STEParams, CTEKraskovParams
+
+logger = logging.getLogger(__name__)
+
+
+def validate_series(series: np.ndarray, base: int, name: str) -> np.ndarray:
+    """
+    Validate a discrete time series and convert it to int32 within [0, base-1].
+
+    @param {np.ndarray|Sequence[int]} series - Discrete series to validate.
+    @param {int} base - Alphabet size; symbols must be in [0, base-1].
+    @param {str} name - Human-readable series name for error messages.
+    @returns {np.ndarray} int32 array with validated symbols.
+    @throws {ValueError} If series is empty, contains NaN/Inf, or values out of range.
+    @pre base >= 2 and name is non-empty.
+    @post Returned array has dtype int32 and length > 0.
+    """
+    if not isinstance(series, np.ndarray):
+        series = np.array(series)
+    
+    if len(series) == 0:
+        raise ValueError(f"{name}: empty series")
+    
+    if np.any(np.isnan(series)) or np.any(np.isinf(series)):
+        raise ValueError(f"{name}: contains NaN/Inf")
+    
+    series = series.astype(np.int32)
+    
+    if np.any(series < 0) or np.any(series >= base):
+        raise ValueError(f"{name}: symbols must be in [0, {base-1}], got range [{series.min()}, {series.max()}]")
+    
+    return series
+
+
+def java_array_int(py_array: np.ndarray) -> JArray:
+    """
+    Convert a numpy array to a Java int[] for JPype/JIDT interop.
+
+    @param {np.ndarray|Sequence[int]} py_array - Source array.
+    @returns {JArray} Java int[] with the same values.
+    @pre Input is convertible to a 1-D int32 numpy array.
+    @post Result length equals input length.
+    """
+    if not isinstance(py_array, np.ndarray):
+        py_array = np.array(py_array, dtype=np.int32)
+    if py_array.dtype != np.int32:
+        py_array = py_array.astype(np.int32)
+    return JArray(JInt)(py_array)
+
+
+def _compute_cte_value_only(source: np.ndarray, dest: np.ndarray, cond: np.ndarray, params: CTEParams) -> float:
+    """
+    Compute CTE value once (no internal significance), with safe truncation.
+    """
+    # Validate inputs against their native bases
+    source = validate_series(source, params.base_source, "source")
+    dest = validate_series(dest, params.base_dest, "dest")
+    cond = validate_series(cond, params.base_cond, "cond")
+
+    if not (len(source) == len(dest) == len(cond)):
+        raise ValueError(f"Length mismatch: source={len(source)}, dest={len(dest)}, cond={len(cond)}")
+
+    # Apply data-level lag for tau>1
+    tau = int(params.tau)
+    if tau > 1:
+        source = source[:-tau]
+        dest = dest[tau:]
+        cond = cond[tau:]
+
+    # Safe truncation for block permutation compatibility
+    k_hist = int(params.k_dest)
+    block = 24
+    n_full = int(len(source))
+    n_eff = max(0, n_full - k_hist)
+    num_safe_blocks = n_eff // block
+    n_eff_safe = num_safe_blocks * block
+    n_total_safe = n_eff_safe + k_hist
+    if num_safe_blocks >= 1 and n_total_safe <= n_full:
+        safe_source = source[:n_total_safe]
+        safe_dest = dest[:n_total_safe]
+        safe_cond = cond[:n_total_safe]
+    else:
+        safe_source, safe_dest, safe_cond = source, dest, cond
+
+    # Initialise CTE calculator (discrete) and compute value
+    CTECalc = jpype.JClass("infodynamics.measures.discrete.ConditionalTransferEntropyCalculatorDiscrete")
+    calc = CTECalc()
+    base_main = int(max(params.base_source, params.base_dest))
+    calc.initialise(base_main, int(params.k_dest), 1, int(params.base_cond))
+
+    j_source = java_array_int(safe_source)
+    j_dest = java_array_int(safe_dest)
+    j_cond = java_array_int(safe_cond)
+    calc.addObservations(j_source, j_dest, j_cond)
+
+    try:
+        return float(calc.computeAverageLocalOfObservations())
+    except Exception as e:
+        logger.error(f"CTE value computation failed: {e}")
+        return float('nan')
+
+
+def _block_permute_source(source: np.ndarray, k_hist: int, block: int, rng: np.random.Generator) -> np.ndarray:
+    """
+    Block-permute the source array after the first k_hist samples, with block size 'block'.
+    Keeps the first k_hist elements in place to preserve initial history alignment.
+    Assumes the caller has already truncated length so that (len(source)-k_hist) is a multiple of block.
+    """
+    n = len(source)
+    if n <= k_hist:
+        return source.copy()
+    tail = source[k_hist:]
+    # Split tail into contiguous blocks of equal size
+    blocks = [tail[i:i+block] for i in range(0, len(tail), block)]
+    order = rng.permutation(len(blocks))
+    shuffled_tail = np.concatenate([blocks[i] for i in order]) if blocks else tail
+    return np.concatenate([source[:k_hist], shuffled_tail])
+
+
+class DiscreteTE:
+    """
+    Wrapper for JIDT TransferEntropyCalculatorDiscrete using 6-arg initialise.
+
+    @param {TEParams} params - TE configuration including bases, histories, and delay (tau).
+    @pre JPype JVM is started and JIDT classes are available on the classpath.
+    @invariant self.calc is either None or a live JIDT calculator instance.
+    """
+    
+    def __init__(self, params: TEParams):
+        self.params = params
+        self.calc = None
+        
+        # Use 0-arg constructor, then 6-arg initialise
+        common_base = max(params.base_source, params.base_dest)
+        TECalculator = jpype.JClass("infodynamics.measures.discrete.TransferEntropyCalculatorDiscrete")
+        self.calc = TECalculator()
+        
+        # JIDT v1.5: initialise(base, k_dest, k_dest_tau, k_source, k_source_tau, delay)
+        # k_tau=1 means use consecutive history, delay=tau for time lag
+        self.calc.initialise(
+            common_base,
+            params.k_dest,
+            1,  # k_dest_tau (consecutive)
+            params.k_source,
+            1,  # k_source_tau (consecutive)
+            params.tau  # delay parameter
+        )
+        
+        logger.debug(f"DiscreteTE initialized: base={common_base}, k_dest={params.k_dest}, k_src={params.k_source}, delay={params.tau}")
+    
+    def compute(self, source: np.ndarray, dest: np.ndarray) -> Tuple[float, float]:
+        """
+        Compute discrete TE and an associated p-value via surrogate testing.
+
+        @param {np.ndarray} source - Source series with alphabet size params.base_source.
+        @param {np.ndarray} dest - Destination series with alphabet size params.base_dest.
+        @returns {[float, float]} A tuple (te_value, p_value); NaN on failure.
+        @throws {ValueError} If validation fails (length mismatch, invalid symbols).
+        @pre len(source) == len(dest) > 0.
+        @post Returned values are finite or NaN when errors occur; internal GC invoked.
+        """
+        try:
+            # Validate
+            source = validate_series(source, self.params.base_source, "source")
+            dest = validate_series(dest, self.params.base_dest, "dest")
+            
+            if len(source) != len(dest):
+                raise ValueError(f"Length mismatch: source={len(source)}, dest={len(dest)}")
+            
+            # Add observations (JIDT uses simple addObservations without start/finalise)
+            self.calc.addObservations(java_array_int(source), java_array_int(dest))
+            
+            # Compute
+            te_value = self.calc.computeAverageLocalOfObservations()
+            
+            # Significance (adaptive or fixed)
+            p_value = np.nan
+            if self.params.adaptive_stages and len(self.params.adaptive_stages) > 0:
+                last_p = np.nan
+                for n_surr in self.params.adaptive_stages:
+                    measure_dist = self.calc.computeSignificance(int(n_surr))
+                    last_p = float(measure_dist.pValue)
+                    # Early stop if decisively significant or non-significant
+                    if self.params.early_stop_sig is not None and last_p <= self.params.early_stop_sig:
+                        break
+                    if self.params.early_stop_nonsig is not None and last_p >= self.params.early_stop_nonsig:
+                        break
+                p_value = last_p
+            else:
+                measure_dist = self.calc.computeSignificance(self.params.num_surrogates)
+                p_value = measure_dist.pValue
+            
+            return (float(te_value) if np.isfinite(te_value) else np.nan,
+                    float(p_value) if np.isfinite(p_value) else np.nan)
+        except Exception as e:
+            logger.error(f"DiscreteTE.compute failed: {e}")
+            return (np.nan, np.nan)
+        finally:
+            gc.collect()
+    
+    def dispose(self):
+        """
+        Dispose the underlying calculator and trigger GC.
+
+        @post self.calc is None.
+        """
+        self.calc = None
+        gc.collect()
+
+
+class StratifiedCTE:
+    """
+    Deprecated stratified-CTE (Fisher-merged) implementation.
+
+    The method computes TE within hour-of-day bins and merges p-values using Fisher's
+    method. It was found to be methodologically unreliable at k=4 during validation
+    (opposite conclusions to True CTE) and is kept only for historical reference.
+
+    @deprecated Use compute_true_cte() instead.
+    """
+    
+    def __init__(self, params: CTEParams):
+        self.params = params
+    
+    def compute(self, source: np.ndarray, dest: np.ndarray, cond: np.ndarray) -> Tuple[float, float]:
+        """
+        Compute stratified CTE and aggregate p-value via Fisher's method.
+
+        @param {np.ndarray} source - Source series (A) with base params.base_source.
+        @param {np.ndarray} dest - Destination series (S) with base params.base_dest.
+        @param {np.ndarray} cond - Conditioning series (hour bin) with base params.base_cond.
+        @returns {[float, float]} Weighted-average CTE and merged p-value; NaN on failure.
+        @pre len(source) == len(dest) == len(cond) > 0; symbols within their bases.
+        @post Returns NaN,NaN if no strata produced valid TE.
+        @note For tau>1, applies data-level lag BEFORE stratification.
+        """
+        try:
+            # Validate
+            source = validate_series(source, self.params.base_source, "source")
+            dest = validate_series(dest, self.params.base_dest, "dest")
+            cond = validate_series(cond, self.params.base_cond, "cond")
+            
+            if not (len(source) == len(dest) == len(cond)):
+                raise ValueError(f"Length mismatch: source={len(source)}, dest={len(dest)}, cond={len(cond)}")
+            
+            # Data-level lag for tau>1: shift source, align dest/cond BEFORE stratification
+            if self.params.tau > 1:
+                tau = self.params.tau
+                source = source[:-tau]  # Drop last tau values from source
+                dest = dest[tau:]       # Align dest (skip first tau)
+                cond = cond[tau:]       # Align cond (skip first tau)
+                logger.debug(f"StratifiedCTE: Applied data-level lag tau={tau}, N_after={len(source)}")
+            
+            # Stratify by conditioning variable
+            unique_cond = np.unique(cond)
+            te_values = []
+            p_values = []
+            weights = []
+            
+            for h in unique_cond:
+                mask = (cond == h)
+                n_h = mask.sum()
+                
+                # Compute TE for this stratum (bins already filtered upstream)
+                source_h = source[mask]
+                dest_h = dest[mask]
+                
+                # Use tau=1 for stratum TE since data is already globally lagged
+                te_params = TEParams(
+                    base_source=self.params.base_source,
+                    base_dest=self.params.base_dest,
+                    k_source=self.params.k_source,
+                    k_dest=self.params.k_dest,
+                    tau=1,  # Already lagged at global level
+                    num_surrogates=self.params.num_surrogates,
+                    adaptive_stages=self.params.adaptive_stages,
+                    early_stop_sig=self.params.early_stop_sig,
+                    early_stop_nonsig=self.params.early_stop_nonsig,
+                    seed=self.params.seed
+                )
+                
+                te_calc = DiscreteTE(te_params)
+                te_h, p_h = te_calc.compute(source_h, dest_h)
+                te_calc.dispose()
+                
+                if np.isfinite(te_h):
+                    te_values.append(te_h)
+                    p_values.append(p_h)
+                    weights.append(n_h / len(source))
+            
+            if not te_values:
+                return (np.nan, np.nan)
+            
+            # Weighted average CTE
+            cte_value = np.average(te_values, weights=weights)
+            
+            # Aggregate p-value (Fisher's method)
+            from scipy.stats import combine_pvalues
+            if len(p_values) > 1:
+                _, p_combined = combine_pvalues(p_values, method='fisher')
+            else:
+                p_combined = p_values[0] if p_values else np.nan
+            
+            return (float(cte_value) if np.isfinite(cte_value) else np.nan,
+                    float(p_combined) if np.isfinite(p_combined) else np.nan)
+            
+        except Exception as e:
+            logger.error(f"StratifiedCTE.compute failed: {e}")
+            return (np.nan, np.nan)
+        finally:
+            gc.collect()
+
+
+def compute_true_cte(source: np.ndarray, dest: np.ndarray, cond: np.ndarray, params: CTEParams) -> Tuple[float, float]:
+    """
+    Compute True Conditional Transfer Entropy using JIDT's discrete conditional TE.
+
+    @param {np.ndarray} source - Source series (A) with base params.base_source.
+    @param {np.ndarray} dest - Destination series (S) with base params.base_dest.
+    @param {np.ndarray} cond - Conditioning series (hour bin) with base params.base_cond.
+    @param {CTEParams} params - CTE configuration (k_dest, tau, surrogates, adaptive stages).
+    @returns {[float, float]} A tuple (cte_value, p_value); NaN on failure.
+    @throws {ValueError} If input validation fails or lengths mismatch.
+    @pre len(source) == len(dest) == len(cond) > 0; symbols within their bases.
+    @post Returns finite values or NaN on failure; arrays are garbage-collected.
+    @note For tau>1, data-level lag is applied to align series before adding observations.
+    @note JIDT ConditionalTransferEntropyCalculatorDiscrete initialise MUST use the 4-arg signature:
+          initialise(int base, int history, int numOtherInfoContributors, int base_others).
+          Here we set:
+            - base = max(base_A, base_S)
+            - history = k_S (destination history)
+            - numOtherInfoContributors = 1
+            - base_others = base_H (hour bins)
+          JIDT API for this calculator does not expose separate setters for k_A (source history),
+          hence k_A is effectively tied to k_S. Callers should ensure k_A == k_S for consistency.
+    """
+    try:
+        # Manual non-causal offset per expert plan (tau = -1 semantics):
+        # source_A_noncausal = source_A[2:]
+        # dest_S_noncausal = dest_S[:-2]
+        # condition_H_noncausal = condition_H[:-2]
+        k_hist = int(params.k_dest)
+        s_full = validate_series(source, params.base_source, "source")
+        d_full = validate_series(dest, params.base_dest, "dest")
+        c_full = validate_series(cond, params.base_cond, "cond")
+        s_nc = s_full[k_hist:]
+        d_nc = d_full[:-k_hist]
+        c_nc = c_full[:-k_hist]
+
+        # Compute TE_actual on non-causal arrays
+        te_actual = _compute_cte_value_only(s_nc, d_nc, c_nc, params)
+
+        # Prepare non-causal arrays for surrogate generation and safe truncation
+        s = s_nc
+        d = d_nc
+        c = c_nc
+        block = 24
+        block = 24
+        n_full = int(len(s))
+        n_eff = max(0, n_full - k_hist)
+        num_safe_blocks = n_eff // block
+        n_eff_safe = num_safe_blocks * block
+        n_total_safe = n_eff_safe + k_hist
+        if num_safe_blocks >= 1 and n_total_safe <= n_full:
+            safe_s = s[:n_total_safe]
+            safe_d = d[:n_total_safe]
+            safe_c = c[:n_total_safe]
+        else:
+            safe_s, safe_d, safe_c = s, d, c
+
+        # Surrogate loop: block-permute source only
+        # Fixed number of surrogates per expert plan
+        M = 1000
+        rng = np.random.default_rng(42)
+        te_surrogates = np.empty(M, dtype=float)
+        for i in range(M):
+            shuf_s = _block_permute_source(safe_s, k_hist=k_hist, block=block, rng=rng)
+            te_i = _compute_cte_value_only(shuf_s, safe_d, safe_c, params)
+            te_surrogates[i] = te_i
+
+        # Right-tailed p-value
+        if np.isnan(te_actual):
+            p_value = float('nan')
+        else:
+            ge = int(np.sum(te_surrogates >= te_actual))
+            p_value = float((ge + 1) / (M + 1))
+
+        return (te_actual if np.isfinite(te_actual) else np.nan,
+                p_value if np.isfinite(p_value) else np.nan)
+    except Exception as e:
+        logger.error(f"TrueCTE.compute failed: {e}")
+        return (np.nan, np.nan)
+    finally:
+        gc.collect()
+
+
+def compute_true_cte_kraskov(source: np.ndarray, dest: np.ndarray, cond: np.ndarray, params: CTEKraskovParams) -> Tuple[float, float]:
+    """
+    Compute Conditional Transfer Entropy using JIDT Kraskov continuous estimator.
+
+    This requires JIDT class: infodynamics.measures.continuous.kraskov.ConditionalTransferEntropyCalculatorKraskov
+
+    @param source {np.ndarray} float64
+    @param dest {np.ndarray} float64
+    @param cond {np.ndarray} float64 (e.g., hour bin as numeric)
+    @returns (cte_value, p_value)
+    """
+    try:
+        # Validate numeric arrays
+        s = np.asarray(source, dtype=float)
+        d = np.asarray(dest, dtype=float)
+        c = np.asarray(cond, dtype=float)
+        if not (len(s) == len(d) == len(c)):
+            raise ValueError(f"Length mismatch: source={len(s)}, dest={len(d)}, cond={len(c)}")
+
+        # Data-level lag for tau>1
+        tau = int(params.tau)
+        if tau > 1:
+            s = s[:-tau]
+            d = d[tau:]
+            c = c[tau:]
+
+        CTEClass = jpype.JClass("infodynamics.measures.continuous.kraskov.ConditionalTransferEntropyCalculatorKraskov")
+        calc = CTEClass()
+        # Set neighbors if supported
+        try:
+            calc.setProperty("k", str(int(params.k_nn)))
+        except Exception:
+            pass
+
+        # Initialise with histories and delay
+        calc.initialise(int(params.k_dest), int(params.k_source), tau)
+
+        # Add observations (continuous)
+        # Some JIDT versions expect cond as 1-D double[]; others support multiple via 2D
+        try:
+            calc.addObservations(s.tolist(), d.tolist(), c.tolist())
+        except Exception:
+            # Fallback: pass cond as a 2D array with one column
+            calc.addObservations(s.tolist(), d.tolist(), [c.tolist()])
+
+        # Compute value
+        cte_value = float('nan')
+        try:
+            cte_value = float(calc.computeAverageLocalOfObservations())
+        except Exception as e:
+            logger.error(f"Kraskov TrueCTE value failed: {e}")
+
+        # Significance if available
+        p_value = float('nan')
+        try:
+            md = calc.computeSignificance(int(params.num_surrogates))
+            p_value = float(md.pValue)
+        except Exception as e:
+            logger.warning(f"Kraskov TrueCTE significance not available/failed: {e}")
+
+        return (cte_value if np.isfinite(cte_value) else np.nan,
+                p_value if np.isfinite(p_value) else np.nan)
+    except Exception as e:
+        logger.error(f"TrueCTE(Kraskov).compute failed: {e}")
+        return (np.nan, np.nan)
+    finally:
+        gc.collect()
+
+class SymbolicTE:
+    """
+    Wrapper for Symbolic Transfer Entropy using ordinal patterns + DiscreteTE.
+
+    @param {STEParams} params - Symbolic TE configuration including ordinal dimension and delay.
+    @pre Ordinal dimension >= 2 and sufficient series length for encoding.
+    """
+    
+    def __init__(self, params: STEParams):
+        self.params = params
+    
+    def ordinal_pattern_encode(self, series: np.ndarray) -> np.ndarray:
+        """
+        Encode a numeric series as ordinal patterns.
+
+        @param {np.ndarray} series - Numeric time series.
+        @returns {np.ndarray} Discrete sequence of ordinal pattern indices (int32).
+        @throws {ValueError} If series is too short for the given ordinal parameters.
+        @pre n_patterns = n - (dim-1)*delay >= 10.
+        @post Returns length n_patterns array with values in [0, dim!-1].
+        """
+        from itertools import permutations
+        
+        n = len(series)
+        n_patterns = n - (self.params.ordinal_dim - 1) * self.params.ordinal_delay
+        
+        if n_patterns < 10:
+            raise ValueError(f"Series too short for ordinal encoding: N={n}")
+        
+        # Create permutation lookup
+        all_perms = list(permutations(range(self.params.ordinal_dim)))
+        perm_to_idx = {perm: i for i, perm in enumerate(all_perms)}
+        
+        patterns = np.zeros(n_patterns, dtype=np.int32)
+        
+        for i in range(n_patterns):
+            indices = [i + j * self.params.ordinal_delay for j in range(self.params.ordinal_dim)]
+            vec = series[indices]
+            rank = tuple(np.argsort(np.argsort(vec)))
+            patterns[i] = perm_to_idx.get(rank, 0)
+        
+        return patterns
+    
+    def compute(self, source: np.ndarray, dest: np.ndarray) -> Tuple[float, float]:
+        """
+        Compute Symbolic TE and p-value by encoding both series as ordinal patterns.
+
+        @param {np.ndarray} source - Source numeric series.
+        @param {np.ndarray} dest - Destination numeric series.
+        @returns {[float, float]} (ste_value, p_value); NaN on failure or insufficient data.
+        @pre After encoding, min(len(source_pat), len(dest_pat)) >= 100.
+        @post Returns NaN if insufficient data; otherwise values from DiscreteTE.
+        """
+        try:
+            import math
+            
+            # Convert to float for ordinal encoding
+            source_f = source.astype(float)
+            dest_f = dest.astype(float)
+            
+            # Encode as ordinal patterns
+            patterns_source = self.ordinal_pattern_encode(source_f)
+            patterns_dest = self.ordinal_pattern_encode(dest_f)
+            
+            # Alphabet size
+            base = math.factorial(self.params.ordinal_dim)
+            
+            # Ensure sufficient data
+            min_len = min(len(patterns_source), len(patterns_dest))
+            if min_len < 100:
+                logger.warning(f"Insufficient symbolic data: N={min_len}")
+                return (np.nan, np.nan)
+            
+            # Truncate
+            patterns_source = patterns_source[:min_len]
+            patterns_dest = patterns_dest[:min_len]
+            
+            # Create TE params for symbolic data
+            te_params = TEParams(
+                base_source=base,
+                base_dest=base,
+                k_source=self.params.k_source,
+                k_dest=self.params.k_dest,
+                tau=self.params.tau,
+                num_surrogates=self.params.num_surrogates,
+                seed=self.params.seed
+            )
+            
+            # Compute TE on symbolic sequences
+            te_calc = DiscreteTE(te_params)
+            ste_value, p_value = te_calc.compute(patterns_source, patterns_dest)
+            te_calc.dispose()
+            
+            return (ste_value, p_value)
+            
+        except Exception as e:
+            logger.error(f"SymbolicTE.compute failed: {e}")
+            return (np.nan, np.nan)
+        finally:
+            gc.collect()
+```
+
+## File: src/preprocessing.py
+```python
+"""
+Loading and preprocessing for ExtraSensory data (English-only).
+
+Defines feature engineering and variable construction used by TE/CTE.
+Contracts use JSDoc-style with DbC elements for clarity.
+
+@module preprocessing
+"""
+
+import pandas as pd
+import numpy as np
+from scipy.stats import zscore
+from sklearn.preprocessing import KBinsDiscretizer
+import os
+import warnings
+import src.settings as settings # Import settings to use defined column names
+
+
+def load_subject_data(uuid: str) -> pd.DataFrame:
+    """
+    Load the combined features_labels CSV for a single subject.
+
+    @param {str} uuid - Subject UUID (filename stem).
+    @returns {pd.DataFrame} DataFrame indexed by timestamp.
+    @throws {FileNotFoundError} If the subject file does not exist.
+    @pre `settings.DATA_PATH` points to ExtraSensory data root.
+    @post DataFrame index is timestamps (seconds since epoch).
+    """
+    file_path = os.path.join(settings.DATA_PATH, f"{uuid}.features_labels.csv")
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Data file not found for UUID {uuid} at {file_path}")
+
+    # Explicitly set the timestamp column as index during loading
+    data = pd.read_csv(file_path, index_col=settings.COL_TIMESTAMP)
+    return data
+
+
+def compute_sma(df: pd.DataFrame) -> np.ndarray:
+    """
+    Compute Signal Magnitude Area (SMA) from tri-axis accelerometer.
+
+    SMA = (|ax| + |ay| + |az|) / 3.
+
+    @param {pd.DataFrame} df - Data containing tri-axis accelerometer columns.
+    @returns {np.ndarray} Continuous SMA values aligned to df rows.
+    @throws {ValueError} If required columns are missing.
+    @pre Columns present: settings.COL_ACC_X/Y/Z.
+    @post Returns 1-D float array of length len(df).
+    """
+    required_cols = [settings.COL_ACC_X, settings.COL_ACC_Y, settings.COL_ACC_Z]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing tri-axis columns for SMA: {missing}")
+    
+    sma = (np.abs(df[settings.COL_ACC_X]) + 
+           np.abs(df[settings.COL_ACC_Y]) + 
+           np.abs(df[settings.COL_ACC_Z])) / 3.0
+    return sma.values
+
+
+def compute_triaxis_variance(df: pd.DataFrame) -> np.ndarray:
+    """
+    Compute tri-axis variance metric from per-axis standard deviations.
+
+    Variance = sqrt(std_x^2 + std_y^2 + std_z^2).
+
+    @param {pd.DataFrame} df - Data with std columns.
+    @returns {np.ndarray} Continuous variance values aligned to df rows.
+    @throws {ValueError} If required std columns are missing.
+    @pre Columns present: settings.COL_ACC_STD_X/Y/Z.
+    @post Returns 1-D float array of length len(df).
+    """
+    required_cols = [settings.COL_ACC_STD_X, settings.COL_ACC_STD_Y, settings.COL_ACC_STD_Z]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing std columns for variance: {missing}")
+    
+    variance = np.sqrt(df[settings.COL_ACC_STD_X]**2 + 
+                       df[settings.COL_ACC_STD_Y]**2 + 
+                       df[settings.COL_ACC_STD_Z]**2)
+    return variance.values
+
+
+def create_composite_feature(df: pd.DataFrame, mode: str = 'composite') -> np.ndarray:
+    """
+    Create activity feature per mode.
+
+    Modes:
+    - 'composite': 0.6*SMA + 0.4*variance
+    - 'sma_only': SMA only
+    - 'variance_only': Variance only
+    - 'magnitude_only': Raw magnitude mean
+
+    @param {pd.DataFrame} df - Input data.
+    @param {str} mode - Feature mode.
+    @returns {np.ndarray} Continuous feature values.
+    @throws {ValueError} If required columns are missing or mode unknown.
+    @pre df contains mode-specific columns; mode is valid.
+    @post Returns 1-D float array.
+    """
+    if mode == 'magnitude_only':
+        if settings.COL_ACTIVITY_INPUT not in df.columns:
+            raise ValueError(f"Missing column: {settings.COL_ACTIVITY_INPUT}")
+        return df[settings.COL_ACTIVITY_INPUT].values
+    
+    elif mode == 'sma_only':
+        return compute_sma(df)
+    
+    elif mode == 'variance_only':
+        return compute_triaxis_variance(df)
+    
+    elif mode == 'composite':
+        sma = compute_sma(df)
+        variance = compute_triaxis_variance(df)
+        # Weighted blend: 60% SMA, 40% variance
+        return 0.6 * sma + 0.4 * variance
+    
+    else:
+        raise ValueError(f"Unknown feature mode: {mode}. Must be one of ['composite', 'sma_only', 'variance_only', 'magnitude_only']")
+
+
+def create_variables(
+    df: pd.DataFrame,
+    feature_mode: str = 'composite',
+    hour_bins: int = 6,
+    a_bins: int = 5,
+    s_mode: str = 'binary'
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Construct aligned variables A, S, H_raw, H_binned from input dataframe (Discrete path).
+
+    - A: z-scored composite feature → 5-quantile discretization → int in {0,1,2,3,4}
+    - S: binary sitting label → int in {0,1}
+    - H_raw: hour-of-day (0..23)
+    - H_binned: 6-bin hour-of-day (4-hour chunks) → int in {0,1,2,3,4,5}
+    """
+    if hour_bins is None:
+        hour_bins = 6
+    if hour_bins != 6:
+        # Enforce the plan's 6-bin requirement
+        hour_bins = 6
+    if a_bins != 5:
+        a_bins = 5
+    if s_mode != 'binary':
+        raise NotImplementedError("Only binary S is supported in the constrained discrete pipeline")
+
+    # Validate required columns
+    if settings.COL_SITTING not in df.columns:
+        raise ValueError(f"Missing required column: {settings.COL_SITTING}")
+
+    # S (binary)
+    series_S = df[settings.COL_SITTING].fillna(0).astype(int)
+
+    # A (composite -> z-score -> 5-quantile discretization)
+    A_cont = create_composite_feature(df, mode=feature_mode).astype(float)
+    zA = zscore(A_cont, nan_policy='omit')
+
+    # H (hour of day) → 6-bin
+    timestamps = pd.to_datetime(df.index, unit='s')
+    H_raw = timestamps.hour.astype(int)
+    # Build preliminary frame to drop NaNs in zA before discretization
+    prelim = pd.DataFrame({'A_z': zA, 'S': series_S.values, 'H_raw': H_raw.values})
+    prelim = prelim.dropna(subset=['A_z'])
+
+    # Discretize A on cleaned rows only
+    reshaped = prelim['A_z'].to_numpy().reshape(-1, 1)
+    discretizer = KBinsDiscretizer(n_bins=a_bins, encode='ordinal', strategy='quantile')
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        a_disc = discretizer.fit_transform(reshaped).astype(int).flatten()
+    a_disc = np.clip(a_disc, 0, a_bins - 1)
+
+    # H 6-bin on cleaned rows
+    bin_edges = np.linspace(0, 24, hour_bins + 1)
+    h_binned = pd.cut(prelim['H_raw'], bins=bin_edges, right=False, labels=False, include_lowest=True).astype(int)
+
+    aligned = pd.DataFrame({
+        'A': a_disc,
+        'S': prelim['S'].astype(int).to_numpy(),
+        'H_raw': prelim['H_raw'].astype(int).to_numpy(),
+        'H_bin': h_binned.to_numpy().astype(int)
+    })
+    aligned = aligned.dropna()
+    if len(aligned) < 200:
+        raise ValueError(f"Insufficient data (N={len(aligned)}) after preprocessing.")
+
+    A_final = aligned['A'].to_numpy().astype(int)
+    S_final = aligned['S'].to_numpy().astype(int)
+    H_raw_final = aligned['H_raw'].to_numpy().astype(int)
+    H_binned_final = aligned['H_bin'].to_numpy().astype(int)
+    assert len(A_final) == len(S_final) == len(H_raw_final) == len(H_binned_final)
+    return A_final, S_final, H_raw_final, H_binned_final
+```
+
+## File: src/run_lag_sweep.py
+```python
+"""
+Lag sweep runner (N=60 users) for discrete Conditional TE with manual offsets.
+
+For each user and tau in [-3,-2,-1,0,1,2,3]:
+- Manually slice arrays to implement the lag (no DELAY property)
+- Apply safe truncation so that (L - k_dest) is divisible by BLOCK_SIZE=24
+- Compute TE(A->S|H) and TE(S->A|H) using _compute_cte_value_only
+- Compute p-values via manual block-permutation surrogates (source only)
+
+Outputs: per_user_lag_sweep_FINAL.csv in analysis/out/lag_sweep_<STAMP>/
+"""
+from __future__ import annotations
+
+import argparse
+from datetime import datetime
+from pathlib import Path
+from typing import List
+
+import numpy as np
+import pandas as pd
+
+from src import preprocessing
+from src.params import CTEParams
+from src.jidt_adapter import _compute_cte_value_only
+from src.analysis import start_jvm, shutdown_jvm
+
+
+BLOCK_SIZE = 24
+K_DEST = 2  # target history (S)
+K_SRC = 1   # source history (A) implicit in the calculator
+TAUS = [-3, -2, -1, 0, 1, 2, 3]
+
+
+def manual_offset_arrays(A: np.ndarray, S: np.ndarray, H: np.ndarray, tau: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Apply integer lag tau by manual slicing.
+    Positive tau means S/H shift forward (A leads), negative tau means A leads.
+    Returns aligned arrays of equal length.
+    """
+    if tau == 0:
+        return A.copy(), S.copy(), H.copy()
+    if tau > 0:
+        # align A[:-tau] with S[tau:], H[tau:]
+        return A[:-tau], S[tau:], H[tau:]
+    else:
+        t = -tau
+        # align A[t:] with S[:-t], H[:-t]
+        return A[t:], S[:-t], H[:-t]
+
+
+def safe_truncate(A: np.ndarray, S: np.ndarray, H: np.ndarray, k_dest: int = K_DEST, block: int = BLOCK_SIZE) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Truncate so that (L - k_dest) is a multiple of block.
+    """
+    L = int(len(A))
+    if not (len(S) == L and len(H) == L):
+        m = min(L, len(S), len(H))
+        A, S, H = A[:m], S[:m], H[:m]
+        L = m
+    n_eff = L - k_dest
+    if n_eff < block:
+        # not enough data for one safe block; return as-is and let caller decide
+        return A[:L], S[:L], H[:L]
+    n_eff_safe = (n_eff // block) * block
+    L_safe = n_eff_safe + k_dest
+    return A[:L_safe], S[:L_safe], H[:L_safe]
+
+
+def block_permute_source(src: np.ndarray, k_hist: int, block: int, rng: np.random.Generator) -> np.ndarray:
+    if len(src) <= k_hist:
+        return src.copy()
+    head = src[:k_hist]
+    tail = src[k_hist:]
+    blocks = [tail[i:i+block] for i in range(0, len(tail), block)]
+    order = rng.permutation(len(blocks))
+    shuf_tail = np.concatenate([blocks[i] for i in order]) if blocks else tail
+    return np.concatenate([head, shuf_tail])
+
+
+def te_with_perm(A: np.ndarray, S: np.ndarray, H: np.ndarray, base_A: int, base_S: int, base_H: int, M: int = 1000) -> tuple[float, float]:
+    params = CTEParams(
+        base_source=base_A,
+        base_dest=base_S,
+        base_cond=base_H,
+        k_source=K_SRC,
+        k_dest=K_DEST,
+        num_cond_bins=1,
+        tau=1,
+        num_surrogates=M,
+    )
+    te_actual = _compute_cte_value_only(A, S, H, params)
+    rng = np.random.default_rng(42)
+    te_sur = np.empty(M, dtype=float)
+    for i in range(M):
+        shuf_A = block_permute_source(A, k_hist=K_DEST, block=BLOCK_SIZE, rng=rng)
+        te_sur[i] = _compute_cte_value_only(shuf_A, S, H, params)
+    if np.isnan(te_actual):
+        p = float('nan')
+    else:
+        p = float((1 + np.sum(te_sur >= te_actual)) / (M + 1))
+    return te_actual, p
+
+
+def load_user_ids_from_report() -> List[str]:
+    # Prefer the stable 60-user list from report/data
+    p = Path('report/data/per_user_true_cte.csv')
+    if p.exists():
+        df = pd.read_csv(p)
+        df = df[df.get('tau', 1) == 1]
+        ids = df.drop_duplicates(subset=['user_id'])['user_id'].tolist()
+        return ids
+    # Fallback: scan data directory
+    data_root = Path('data/ExtraSensory.per_uuid_features_labels')
+    ids = [f.name.split('.features_labels.csv')[0] for f in data_root.glob('*.features_labels.csv')]
+    return ids[:60]
+
+
+def main():
+    ap = argparse.ArgumentParser(description='Run lag sweep across N=60 users (discrete CTE, manual offsets).')
+    ap.add_argument('--outdir', default=None, help='Output directory (default: analysis/out/lag_sweep_<stamp>)')
+    args = ap.parse_args()
+
+    stamp = datetime.now().strftime('%Y%m%d_%H%M')
+    out_dir = Path(args.outdir) if args.outdir else Path(f'analysis/out/lag_sweep_{stamp}')
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    user_ids = load_user_ids_from_report()
+    if len(user_ids) != 60:
+        print(f"WARN: user count = {len(user_ids)} (expected 60)")
+
+    rows = []
+    start_jvm()
+    try:
+        for uid in user_ids:
+            try:
+                df = preprocessing.load_subject_data(uid)
+                A, S, H_raw, H = preprocessing.create_variables(df, feature_mode='composite', hour_bins=6, a_bins=5, s_mode='binary')
+                A = A.astype(int); S = S.astype(int); H = H.astype(int)
+                for tau in TAUS:
+                    # Manual offset
+                    A_tau, S_tau, H_tau = manual_offset_arrays(A, S, H, tau)
+                    # Safe truncation using (L - k_dest)
+                    A_safe, S_safe, H_safe = safe_truncate(A_tau, S_tau, H_tau, k_dest=K_DEST, block=BLOCK_SIZE)
+                    # Base sizes
+                    base_A = int(np.max(A_safe)) + 1 if len(A_safe) else 0
+                    base_S = int(np.max(S_safe)) + 1 if len(S_safe) else 0
+                    base_H = int(np.max(H_safe)) + 1 if len(H_safe) else 0
+                    if min(len(A_safe), len(S_safe), len(H_safe)) < (K_DEST + BLOCK_SIZE):
+                        rows.append({
+                            'user_id': uid, 'tau': tau,
+                            'TE_A_to_S': np.nan, 'p_A_to_S': np.nan,
+                            'TE_S_to_A': np.nan, 'p_S_to_A': np.nan,
+                        })
+                        continue
+                    # A->S
+                    te_a2s, p_a2s = te_with_perm(A_safe, S_safe, H_safe, base_A, base_S, base_H)
+                    # S->A
+                    te_s2a, p_s2a = te_with_perm(S_safe, A_safe, H_safe, base_S, base_A, base_H)
+                    rows.append({
+                        'user_id': uid, 'tau': tau,
+                        'TE_A_to_S': te_a2s, 'p_A_to_S': p_a2s,
+                        'TE_S_to_A': te_s2a, 'p_S_to_A': p_s2a,
+                    })
+            except Exception as e:
+                print(f"ERROR user {uid}: {e}")
+                for tau in TAUS:
+                    rows.append({'user_id': uid, 'tau': tau, 'TE_A_to_S': np.nan, 'p_A_to_S': np.nan, 'TE_S_to_A': np.nan, 'p_S_to_A': np.nan})
+    finally:
+        shutdown_jvm()
+
+    out_csv = out_dir / 'per_user_lag_sweep_FINAL.csv'
+    pd.DataFrame(rows).to_csv(out_csv, index=False)
+    print(f"Saved: {out_csv}")
+
+
+if __name__ == '__main__':
+    main()
+
+```
+
+## File: src/report_lag_sweep.py
+```python
+"""
+Reporting for lag sweep: aggregate means per tau and plot curves.
+
+Input: per_user_lag_sweep_FINAL.csv (from src/run_lag_sweep.py)
+Output: fig_lag_sweep_curves.png in the same directory
+"""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import ttest_rel, wilcoxon, t as student_t
+
+
+def main():
+    ap = argparse.ArgumentParser(description='Report lag sweep results (means per tau and curves).')
+    ap.add_argument('--csv', required=True, help='Path to per_user_lag_sweep_FINAL.csv')
+    args = ap.parse_args()
+
+    p = Path(args.csv)
+    df = pd.read_csv(p)
+    # Ensure numeric
+    df['tau'] = pd.to_numeric(df['tau'], errors='coerce')
+    df['TE_A_to_S'] = pd.to_numeric(df['TE_A_to_S'], errors='coerce')
+    df['TE_S_to_A'] = pd.to_numeric(df['TE_S_to_A'], errors='coerce')
+
+    # Aggregate means per tau
+    means = df.groupby('tau', as_index=False).agg(
+        mean_A2S=('TE_A_to_S', 'mean'),
+        mean_S2A=('TE_S_to_A', 'mean'),
+        n=('user_id', 'count'),
+    ).sort_values('tau')
+
+    # Print a text table
+    print('Lag sweep means (bits):')
+    for _, r in means.iterrows():
+        print(f"tau={int(r['tau']):2d}  mean_A2S={r['mean_A2S']:.6f}  mean_S2A={r['mean_S2A']:.6f}  n={int(r['n'])}")
+
+    # Plot curves
+    out_png = p.parent / 'fig_lag_sweep_curves.png'
+    plt.figure(figsize=(7, 4.2))
+    plt.plot(means['tau'], means['mean_A2S'], '-o', color='#4C78A8', label='TE(A→S|H)')
+    plt.plot(means['tau'], means['mean_S2A'], '-o', color='#E45756', label='TE(S→A|H)')
+    plt.axhline(0.0, color='#777', ls=':', lw=1)
+    plt.xlabel('tau (samples)')
+    plt.ylabel('TE (bits)')
+    plt.title('Lag sweep: mean TE vs tau (N=60)')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=300)
+    plt.close()
+    print(f"Saved: {out_png}")
+
+    # Paired Tests: per-user S→A at tau ∈ {-1, 0, 1}
+    print("\nPaired Tests (per-user S→A at tau = 1 vs -1, and 1 vs 0):")
+    per_user = (
+        df[["user_id", "tau", "TE_S_to_A"]]
+        .dropna(subset=["tau"])
+        .copy()
+    )
+    per_user = per_user.groupby(["user_id", "tau"], as_index=False)["TE_S_to_A"].mean()
+    pv = per_user.pivot_table(index="user_id", columns="tau", values="TE_S_to_A", aggfunc="mean")
+    def paired_arrays(t1, t2):
+        sub = pv[[t1, t2]].dropna()
+        return sub[t1].to_numpy(), sub[t2].to_numpy()
+
+    try:
+        a1, a_1 = paired_arrays(1, -1)
+        t_stat_1, p_val_1 = ttest_rel(a1, a_1)
+        w_stat_1, w_p_1 = wilcoxon(a1, a_1)
+    except Exception:
+        t_stat_1 = p_val_1 = w_stat_1 = w_p_1 = float("nan")
+    print(f"Test 1 (g(1) vs g(-1)) t={t_stat_1:.6f} p={p_val_1:.6g}")
+    print(f"Test 1 (g(1) vs g(-1)) Wilcoxon W={w_stat_1:.6f} p={w_p_1:.6g}")
+
+    try:
+        a1, a0 = paired_arrays(1, 0)
+        t_stat_2, p_val_2 = ttest_rel(a1, a0)
+        w_stat_2, w_p_2 = wilcoxon(a1, a0)
+    except Exception:
+        t_stat_2 = p_val_2 = w_stat_2 = w_p_2 = float("nan")
+    print(f"Test 2 (g(1) vs g(0))  t={t_stat_2:.6f} p={p_val_2:.6g}")
+    print(f"Test 2 (g(1) vs g(0))  Wilcoxon W={w_stat_2:.6f} p={w_p_2:.6g}")
+    # Bar chart of mean differences with 95% CI
+    try:
+        sub10 = pv[[1, 0]].dropna()
+        sub1m1 = pv[[1, -1]].dropna()
+        d2 = (sub10[1] - sub10[0]).to_numpy()
+        d1 = (sub1m1[1] - sub1m1[-1]).to_numpy()
+        def mean_ci(a):
+            n = len(a)
+            mu = float(a.mean()) if n>0 else float('nan')
+            sd = float(a.std(ddof=1)) if n>1 else float('nan')
+            if n > 1:
+                tcrit = float(student_t.ppf(0.975, df=n-1))
+                se = sd / (n ** 0.5)
+                lo, hi = mu - tcrit * se, mu + tcrit * se
+            else:
+                lo = hi = float('nan')
+            return mu, lo, hi
+        mu1, lo1, hi1 = mean_ci(d1)
+        mu2, lo2, hi2 = mean_ci(d2)
+        def p_str(p):
+            try:
+                return 'p < 1e-7' if p < 1e-7 else f"p = {p:.2e}"
+            except Exception:
+                return 'p = nan'
+        p1s = p_str(p_val_1)
+        p2s = p_str(p_val_2)
+        out_bar = p.parent / 'fig_paired_tests.png'
+        labels = ['g(1)-g(-1)', 'g(1)-g(0)']
+        means_bar = [mu1, mu2]
+        ci_lows = [mu1 - lo1 if np.isfinite(lo1) else 0.0, mu2 - lo2 if np.isfinite(lo2) else 0.0]
+        ci_highs = [hi1 - mu1 if np.isfinite(hi1) else 0.0, hi2 - mu2 if np.isfinite(hi2) else 0.0]
+        x = np.arange(len(labels))
+        plt.figure(figsize=(5.5, 4))
+        plt.bar(x, means_bar, yerr=[ci_lows, ci_highs], capsize=6, color=['#4C78A8', '#E45756'], alpha=0.9)
+        for i, (m, ps) in enumerate(zip(means_bar, [p1s, p2s])):
+            y_annot = m + (ci_highs[i] if np.isfinite(ci_highs[i]) else 0) + 0.002
+            plt.text(i, y_annot, ps, ha='center', va='bottom', fontsize=9)
+        plt.xticks(x, labels)
+        plt.axhline(0.0, color='#777', ls=':', lw=1)
+        plt.ylabel('Mean difference in TE (bits)')
+        plt.title('Paired differences with 95% CI')
+        plt.tight_layout()
+        plt.savefig(out_bar, dpi=300)
+        plt.close()
+        print(f"Saved: {out_bar}")
+    except Exception as e:
+        print(f"WARN: Could not generate paired tests plot: {e}")
+
+
+if __name__ == '__main__':
+    main()
+
+
+
+```
+
+## File: src/reporting.py
+```python
+"""
+Reporting utilities for the final constrained discrete CTE plan.
+
+Reads per_user_true_cte_discrete_k2l1_blockperm.csv and computes:
+- Bonferroni-corrected significance counts (raw p * N_users)
+- Robust group statistics over the 60 Delta_TE values (tau==1):
+  * Mean, sample SD, and N
+  * One-sample t-test vs 0
+  * Wilcoxon signed-rank test (median vs 0)
+  * Sign test summary (counts of negatives / positives / zeros)
+- Saves a histogram of the 60 Delta_TE values as fig_delta_te_distribution.png
+"""
+from __future__ import annotations
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from scipy.stats import ttest_1samp, wilcoxon
+import matplotlib.pyplot as plt
+
+
+def summarize_results(csv_path: str | Path) -> dict:
+    p = Path(csv_path)
+    df = pd.read_csv(p)
+    # Expect columns: user_id, tau, k, l, hour_bins, CTE_true_A2S, CTE_true_S2A, Delta_TE, p_A2S, p_S2A
+    # Filter to tau==1 and keep 1 row per user (N=60)
+    df1 = df[df['tau'] == 1].copy()
+    df1 = df1.drop_duplicates(subset=['user_id'])
+    # Delta values
+    delta = pd.to_numeric(df1['Delta_TE'], errors='coerce').dropna().to_numpy()
+    n = int(delta.size)
+    # Bonferroni: multiply p by N and test against alpha
+    alpha = 0.05
+    bonf = n if n > 0 else 1
+    # Use tau==1 p-values if present; else fall back to zeros for counts
+    p_a2s = pd.to_numeric(df1.get('p_A2S'), errors='coerce') if 'p_A2S' in df1.columns else pd.Series([np.nan]*n)
+    p_s2a = pd.to_numeric(df1.get('p_S2A'), errors='coerce') if 'p_S2A' in df1.columns else pd.Series([np.nan]*n)
+    sig_A2S = int(((p_a2s * bonf) < alpha).fillna(False).sum())
+    sig_S2A = int(((p_s2a * bonf) < alpha).fillna(False).sum())
+
+    mu = float(np.mean(delta)) if n else float('nan')
+    sd = float(np.std(delta, ddof=1)) if n > 1 else float('nan')
+    t_stat, p_val = ttest_1samp(delta, 0.0) if n >= 2 else (float('nan'), float('nan'))
+    # Wilcoxon signed-rank (non-parametric)
+    try:
+        w_stat, w_p = wilcoxon(delta) if n >= 1 else (float('nan'), float('nan'))
+    except ValueError:
+        w_stat, w_p = (float('nan'), float('nan'))
+    # Sign test summary
+    neg = int((delta < 0).sum())
+    pos = int((delta > 0).sum())
+    zeros = int((delta == 0).sum())
+
+    # Plot and save histogram next to the CSV
+    fig_path = p.parent / 'fig_delta_te_distribution.png'
+    try:
+        plt.figure(figsize=(6, 4))
+        plt.hist(delta, bins=12, color="#4C78A8", alpha=0.9, edgecolor='white')
+        plt.axvline(0.0, color="#777", ls=":", lw=1)
+        plt.axvline(mu, color="#A05195", ls="-", lw=1.5, label=f"mean={mu:.4f}")
+        plt.xlabel("Delta TE (bits)")
+        plt.ylabel("Count")
+        plt.title(f"Delta TE distribution (N={n}, tau=1)")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(fig_path, dpi=300)
+        plt.close()
+        fig_saved = True
+    except Exception:
+        fig_saved = False
+
+    return {
+        'N_users': n,
+        'Bonferroni_factor': bonf,
+        'A2S_sig_count': sig_A2S,
+        'S2A_sig_count': sig_S2A,
+        'Delta_mean': mu,
+        'Delta_sd': sd,
+        'ttest_t': float(t_stat) if np.isfinite(t_stat) else float('nan'),
+        'ttest_p': float(p_val) if np.isfinite(p_val) else float('nan'),
+        'wilcoxon_W': float(w_stat) if np.isfinite(w_stat) else float('nan'),
+        'wilcoxon_p': float(w_p) if np.isfinite(w_p) else float('nan'),
+        'sign_neg': neg,
+        'sign_pos': pos,
+        'sign_zero': zeros,
+        'figure_path': str(fig_path),
+        'figure_saved': fig_saved,
+    }
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(description='Summarize constrained discrete CTE results')
+    ap.add_argument('--csv', default='analysis/out/latest/per_user_true_cte_discrete_k2l1_blockperm.csv', help='Path to per_user CSV')
+    args = ap.parse_args()
+    res = summarize_results(args.csv)
+    print('N_users          :', res['N_users'])
+    print('Bonferroni factor:', res['Bonferroni_factor'])
+    print('A2S sig count    :', res['A2S_sig_count'])
+    print('S2A sig count    :', res['S2A_sig_count'])
+    print('Delta mean (bits):', f"{res['Delta_mean']:.6f}")
+    print('Delta sd (bits)  :', f"{res['Delta_sd']:.6f}")
+    print('t-test t         :', f"{res['ttest_t']:.4f}")
+    print('t-test p         :', f"{res['ttest_p']:.6g}")
+    print('Wilcoxon W       :', f"{res['wilcoxon_W']:.4f}")
+    print('Wilcoxon p       :', f"{res['wilcoxon_p']:.6g}")
+    print('Sign test counts :', f"neg={res['sign_neg']} pos={res['sign_pos']} zero={res['sign_zero']}")
+    print('Histogram saved  :', res['figure_saved'], res['figure_path'])
+
+
+if __name__ == '__main__':
+    main()
+```
+
+## File: run_production.py
+```python
 #!/usr/bin/env python
 """Production-ready pipeline with tracking, heartbeat, and monitoring.
 
@@ -1312,3 +2537,101 @@ Examples:
 
 if __name__ == "__main__":
     main()
+```
+
+## File: config/presets/production_k6_true_cte.yaml
+```yaml
+# FINAL RUN CONFIG
+#
+# This is the final production preset:
+# - 60 users; AIS k-selection up to k=6 (73% users select k=6 in diagnostics)
+# - True CTE is the core method; Global TE retained but allowed to OOM at k>=5 (record NaN and continue)
+# - Adaptive surrogate stages up to 10k; FDR corrected per (family × tau)
+#
+# Full production run: 60 users, AIS up to k=6, 10k surrogates with adaptive early stop, Global TE + True CTE only
+
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/production_k6_true_cte_<STAMP>"
+
+n_users: 60
+feature_modes: [composite]
+
+quality_profile: "balanced"
+taus: [1, 2]
+
+# Hour bins
+hour_bins: 6
+conditional_transfer_entropy:
+  hour_bins: 6
+  method: "STRATIFIED-CTE"  # not used in this preset (analysis_modes excludes stratified_te)
+
+# K-selection via AIS up to k=6
+k_selection:
+  strategy: "AIS"
+  k_grid: [1, 2, 3, 4, 5, 6]
+  k_max: 6
+  undersampling_guard: true
+
+# Significance testing: 10k upper bound with adaptive stages
+surrogates: 10000
+statistical:
+  adaptive_surrogates:
+    enabled: true
+    stages: [1000, 3000, 10000]
+    p_sig: 0.01
+    p_nonsig: 0.20
+
+fdr:
+  families: [TE, TRUE_CTE]
+  by_tau: true
+  alpha: 0.05
+
+# JVM: 6 workers × 8g
+jvm:
+  xms: "4g"
+  xmx: "8g"
+  opts:
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=300"
+    - "-Djava.awt.headless=true"
+
+runtime:
+  concurrency: 6
+  checkpoint: true
+  heartbeat_interval: 60
+
+# Only run Global TE and True CTE
+analysis_modes: [global_te, true_cte]
+
+schema_version: "v1.0"
+```
+
+## File: config/presets/sanity_check_tau_neg_1.yaml
+```yaml
+data_root: "data/ExtraSensory.per_uuid_features_labels"
+out_dir: "analysis/out/sanity_tau_neg1_<STAMP>"
+
+n_users: 60
+feature_modes: [composite]
+
+# Discrete path settings
+hour_bins: 6
+taus: [1]  # Keep tau loop at 1; DELAY property controls lag=-1 internally
+
+# K selection (unused by runner for discrete fixed k,l, but kept for completeness)
+k_selection:
+  strategy: "FIXED"
+  k_fixed: 2
+
+# Surrogates count for manual block permutation
+surrogates: 1000
+
+runtime:
+  concurrency: 4
+  checkpoint: true
+  heartbeat_interval: 60
+
+analysis_modes: [true_cte]
+
+schema_version: "v1.0"
+```
