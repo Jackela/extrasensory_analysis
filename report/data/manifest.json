@@ -1,0 +1,281 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "committed_curated_exports",
+  "primary": "per_user_true_cte.csv",
+  "legacy_summary_field_semantics": "TE-labelled columns alias True CTE, checked against primary",
+  "full_raw_run_committed": false,
+  "unique_users": 60,
+  "k_6_unique_users": 44,
+  "metrics": [
+    {
+      "tau": 1,
+      "users": 60,
+      "mean_delta_true_cte_bits": -0.03342576725718517,
+      "a_to_s_q_lt_0_05_users": 33,
+      "a_to_s_q_lt_0_05_percent": 55.0
+    },
+    {
+      "tau": 2,
+      "users": 60,
+      "mean_delta_true_cte_bits": -0.03533691719410499,
+      "a_to_s_q_lt_0_05_users": 13,
+      "a_to_s_q_lt_0_05_percent": 21.666666666666668
+    }
+  ],
+  "sensitivity_cells": 12,
+  "files": [
+    {
+      "path": "appendix_sensitivity_raw/A3_Sbinary_H2h_summary.csv",
+      "sha256": "a503b4adaec175e1898f632f6a4e175ad784402544efcfceefb53f2ee7c62b44",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "appendix_sensitivity_raw/A3_Sbinary_H4h_summary.csv",
+      "sha256": "f3eefe0c5a76a6a13748a2e4b1273d73db45fe408220f41b83a45f3abe7b9f79",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "appendix_sensitivity_raw/A3_Squantile3_H2h_summary.csv",
+      "sha256": "b50373a88119893c7a464be624b043da2abfad1a4587b03801535b706b68dba8",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "appendix_sensitivity_raw/A3_Squantile3_H4h_summary.csv",
+      "sha256": "6fe0ad5316b1645b24bc9dd718455771f102ebbb47925506f8cf84b26f40c6a0",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "appendix_sensitivity_raw/A5_Sbinary_H2h_summary.csv",
+      "sha256": "b14b12258d68a27fa04281a8384d4268be979c9e5b4ab161b12d2637156ae36f",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "appendix_sensitivity_raw/A5_Sbinary_H4h_summary.csv",
+      "sha256": "fad6b9d46ab00c8e92d51f61021f6df1b76077cb92df30258c9cdc656acd30a5",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "appendix_sensitivity_raw/A5_Squantile3_H2h_summary.csv",
+      "sha256": "b4d50174bb57d96eb52b70f33702f85e268b5703fc0b8a4ebf85d765be4d98cc",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "appendix_sensitivity_raw/A5_Squantile3_H4h_summary.csv",
+      "sha256": "f2497acb646c087aea17f3caf3fb763b067ad68a539fedc0aefefbf728a728c7",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "appendix_sensitivity_raw/A7_Sbinary_H2h_summary.csv",
+      "sha256": "dc820121847d627f6ec8e1fb5cbbf3fce51bcbeb75d6b1863e2efbc89af60946",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "appendix_sensitivity_raw/A7_Sbinary_H4h_summary.csv",
+      "sha256": "beb47647fb959e668735a2223f1086445bfd3fd78d644234114f8756f06b2a9d",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "appendix_sensitivity_raw/A7_Squantile3_H2h_summary.csv",
+      "sha256": "877e926ff11317a1c83986d0c13d3ee0fb94ae12f55dca91ac7cfdfef7f7b8a9",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "appendix_sensitivity_raw/A7_Squantile3_H4h_summary.csv",
+      "sha256": "d8e82aae134b88db2b29291e12b7cc4b50d234565091bee29f324e6ee81f2a91",
+      "rows": 1,
+      "columns": [
+        "combo",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    },
+    {
+      "path": "final_results_summary_n60.csv",
+      "sha256": "d1d1654c3a4d009be6eb43a94c29f54c6eb9c36f480814191a0ac4dec5cf86d8",
+      "rows": 120,
+      "columns": [
+        "user_id",
+        "tau",
+        "k_A",
+        "k_S",
+        "Delta_TE",
+        "TE_AtoS",
+        "TE_StoA",
+        "p_AtoS",
+        "q_AtoS",
+        "p_StoA",
+        "q_StoA"
+      ]
+    },
+    {
+      "path": "k_selected_by_user_ALL.csv",
+      "sha256": "bd2c1940e6ead8ce4c01364846af36537fda7ebab4abddc9aee55075d213d420",
+      "rows": 120,
+      "columns": [
+        "user_id",
+        "short_id",
+        "k_selected"
+      ]
+    },
+    {
+      "path": "per_user_true_cte.csv",
+      "sha256": "ff4f22295aff96703db2bf8594f5bfdf767d68bd8f0615b5750cf7a2ab3d64c6",
+      "rows": 120,
+      "columns": [
+        "user_id",
+        "feature_mode",
+        "k",
+        "l",
+        "tau",
+        "hour_bins",
+        "CTE_true_A2S",
+        "CTE_true_S2A",
+        "Delta_CTE_true",
+        "p_A2S",
+        "p_S2A",
+        "q_A2S",
+        "q_S2A",
+        "p_Delta_CTE_true",
+        "q_Delta_CTE_true",
+        "n_samples",
+        "n_samples_per_bin_min",
+        "low_n",
+        "low_n_hours",
+        "bins_filtered",
+        "quality_passed"
+      ]
+    },
+    {
+      "path": "sensitivity_12cell_matrix.csv",
+      "sha256": "9f2fa5df47d7de30f7a3c0c5236b6ccd6b59a337477d7a3b7f48868218dd1b63",
+      "rows": 12,
+      "columns": [
+        "A_bins",
+        "H_bin_hours",
+        "S_mode",
+        "N",
+        "mean_Delta_CTE_true",
+        "median_Delta_CTE_true",
+        "ci95_lower",
+        "ci95_upper",
+        "t_stat",
+        "p_value"
+      ]
+    }
+  ]
+}

@@ -1,13 +1,13 @@
 Report Data Package
 ===================
 
-This folder contains the curated CSVs used to generate the final report figures and tables. For every file, we document its provenance (source) and purpose (how it is used in the report).
+This folder contains committed curated CSV exports for the historical report. [manifest.json](manifest.json) records current paths, hashes, row counts and descriptive metrics. Verify it offline with `python tools/verify_report_data.py` from the repository root. Historical `analysis/out` producer directories are not included in this checkout.
 
 Files
 -----
 
 - final_results_summary_n60.csv
-  - Purpose: Final N=60 core run summary. Used to report group-level ΔTE mean and significance in the main text.
+  - Purpose: Legacy N=60 summary export. Its TE-labelled columns contain True CTE values, checked against `per_user_true_cte.csv`; it is not a second Global TE result set. Both files have 120 rows: 60 distinct users at each of two τ values.
   - Provenance: Produced by the core run using `config/presets/production_k6_true_cte.yaml`.
   - Source path example: `analysis/out/FINAL_RUN_k60_COMPLETE/final_results_summary_n60.csv`.
 
@@ -17,7 +17,7 @@ Files
   - Source path example: `analysis/out/FINAL_RUN_k60_COMPLETE/per_user_true_cte.csv`.
 
 - k_selected_by_user_ALL.csv
-  - Purpose: Diagnostics for adaptive k-selection across the N=60 users. Used to justify the choice `k = 6` via a distribution plot (Fig. 1), where the `k=6` bar is dominant (N=44).
+  - Purpose: Adaptive k-selection diagnostics. The 120 raw rows include repeated users and blank selections; the verification uses one consistent nonempty selection per user, giving 44 of 60 users at k=6.
   - Provenance: Produced by the diagnostic pipeline using `config/presets/diagnostic_k_qc.yaml`.
   - Source path example: `analysis/out/production_k6_true_cte_merged/k_selected_by_user_ALL.csv`.
 

@@ -1,32 +1,21 @@
-# ExtraSensory Causal Information Analysis (Final, English Only)
+# ExtraSensory Information Transfer Analysis
 
-This repository provides an information-theoretic causal analysis pipeline for the ExtraSensory dataset, built on JIDT. Docs are now English-only and aligned with the final implementation pivot: True Conditional Transfer Entropy (True CTE) is the basis for conclusions; Global TE is computed opportunistically and recorded as NaN when high-k causes OOM.
+This repository contains a JIDT-based information-transfer analysis pipeline and historical result exports for the ExtraSensory dataset. Documentation and maintenance are handled by AI; source code, configuration and committed data remain the reference for each claim.
 
-## Final Conclusion (N=60)
+## Committed results (N=60)
 
-- Hypothesis falsified: We reject the original hypothesis H1: E[ΔTE] > 0 (i.e., A→S stronger than S→A) on the full N=60 dataset [cite: 1-41].
-- Using True CTE at τ=1, the final mean ΔTE (bits) is -0.033426 [cite: 13-14].
-- Interpretation: After conditioning on hour-of-day (H), information flow from sitting to activity (S→A) is, on average, greater than the flow from activity to sitting (A→S).
-- A→S signal remains real and prevalent: at τ=1, 55.9% (33/60) of users show statistically significant A→S information flow after FDR correction (q < 0.05) [cite: 13-14].
+The current result package is [report/data](report/data/README.md). Its CSV exports contain 60 distinct users at each of τ=1 and τ=2. At τ=1, mean ΔTrue CTE is **−0.033426 bits**, and **33/60 users (55.0%)** have an A→S adjusted p-value below 0.05. The k-selection diagnostic gives k=6 for 44 distinct users. These are descriptive checks of the committed exports, with file hashes and calculation fields in [manifest.json](report/data/manifest.json).
 
-## Key Context (5 concise points)
+The primary file is `per_user_true_cte.csv`. The legacy `final_results_summary_n60.csv` uses TE-labelled columns for the same True CTE values; the verification command checks their numerical agreement. The raw run directories previously named `analysis/out/FINAL_RUN_k60_COMPLETE` and `analysis/out/production_k6_true_cte_merged` are historical producer paths and are not included in this checkout. The committed exports support the numbers above; they do not establish that the full pipeline has been rerun.
 
-1) Original plan: Global TE + stratified CTE (per-hour TE + Fisher p-merge).
-2) Validation showed stratified CTE is methodologically unreliable at k=4, so it is deprecated.
-3) Resource reality: when k≥5, Global TE often OOMs with 8–12GB JVM heap due to state space explosion.
-4) Diagnostics: AIS-based k-selection shows 73% of users select k=6 (44/60) — see evidence file below.
-5) Final pivot: adopt True CTE as the core method; accept Global TE OOM at high k and record NaN.
+The [12-cell sensitivity export](report/data/sensitivity_12cell_matrix.csv) and its raw summary appendix are also included. Its grid uses A_bins ∈ {3,5,7}, S_mode ∈ {binary, quantile3}, and H_bin_hours ∈ {2,4}, with N=10 and k≤4. All 12 recorded mean differences are negative. The analysis remains conditional on discretization, sample selection and the surrogate testing method described below.
 
-## Results and Evidence
+```bash
+python tools/verify_report_data.py
+python -m unittest discover -s tests -p 'test_report_evidence.py'
+```
 
-- Final outputs: `analysis/out/FINAL_RUN_k60_COMPLETE`
-  - Includes `per_user_true_cte.csv` (primary), `per_user_te.csv` (NaN for OOM at high k), `run_info.yaml`, `k_selected_by_user.csv`.
-- Pivot evidence: `analysis/out/production_k6_true_cte_merged/k_selected_by_user_ALL.csv`
-  - Shows 44/60 users selecting k=6 with AIS, supporting the True CTE pivot and acceptance of TE OOM at high k.
-
-- Sensitivity analysis (N=10; 12-cell grid): `analysis/out/sensitivity/20251107_1146/summary.csv`
-  - Evaluates discretization choices across A_bins ∈ {3,5,7}, S_mode ∈ {binary, quantile3}, H bins ∈ {6,12}, with a global AIS cap k ≤ 4 for stability.
-  - Outcome: all 12 combinations produce mean ΔCTE_true < 0; binary S-mode is strongly significant; quantile3 S-mode is consistently negative with marginal/non-significant p-values (~0.09–0.13). Directional conclusion is robust across all schemes under k ≤ 4.
+The core method is True Conditional Transfer Entropy through JIDT, with hour-of-day as the conditioning variable. Global TE may exhaust the JVM heap at high k and is recorded as NaN. Reproduction requires the original dataset and JIDT environment.
 
 ## Reproduction (Final Run Config)
 
@@ -143,9 +132,9 @@ If you use this code in your research, please cite:
 ```bibtex
 @software{extrasensory_te_analysis,
   title = {ExtraSensory Transfer Entropy Analysis},
-  author = {Your Name},
+  author = {{extrasensory_analysis contributors}},
   year = {2025},
-  url = {https://github.com/yourusername/extrasensory_analysis}
+  url = {https://github.com/Jackela/extrasensory_analysis}
 }
 ```
 
@@ -187,7 +176,7 @@ Contributions welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/extrasensory_analysis/issues)
+- **Issues**: [GitHub Issues](https://github.com/Jackela/extrasensory_analysis/issues)
 - **Questions**: See documentation or open a discussion
 
 ## Acknowledgments

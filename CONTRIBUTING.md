@@ -11,12 +11,12 @@ This project adheres to a code of professional conduct. By participating, you ar
 ### Reporting Bugs
 
 Before submitting a bug report:
-1. Check existing [GitHub Issues](https://github.com/yourusername/extrasensory_analysis/issues)
+1. Check existing [GitHub Issues](https://github.com/Jackela/extrasensory_analysis/issues)
 2. Ensure you're using the latest version
 3. Test with a minimal reproducible example
 
 **Bug Report Template**:
-```markdown
+````markdown
 **Environment**:
 - Python version: [e.g., 3.12.1]
 - OS: [e.g., Ubuntu 22.04, Windows 11, macOS 14]
@@ -35,7 +35,7 @@ Before submitting a bug report:
 **Expected Behavior**: [What should happen]
 **Actual Behavior**: [What actually happens]
 **Error Log**: [Paste from errors.log]
-```
+````
 
 ### Suggesting Enhancements
 
@@ -321,8 +321,8 @@ Closes #123
 
 ## Questions?
 
-- **General questions**: Open a [Discussion](https://github.com/yourusername/extrasensory_analysis/discussions)
-- **Bug reports**: Open an [Issue](https://github.com/yourusername/extrasensory_analysis/issues)
+- **General questions**: Open a [Discussion](https://github.com/Jackela/extrasensory_analysis/discussions)
+- **Bug reports**: Open an [Issue](https://github.com/Jackela/extrasensory_analysis/issues)
 - **Security issues**: Email maintainers directly (do not open public issue)
 
 Thank you for contributing! 🎉
