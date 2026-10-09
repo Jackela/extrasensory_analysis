@@ -24,8 +24,15 @@ def summarize(data_dir: Path) -> dict:
     pairs = [(r["user_id"], r["tau"]) for r in primary]
     if len(pairs) != len(set(pairs)):
         raise ValueError("Duplicate user/tau observation in primary export")
-    if len({r["user_id"] for r in primary}) != 60 or set(r["tau"] for r in primary) != {"1", "2"}:
+    if (
+        len(primary) != 120
+        or len({r["user_id"] for r in primary}) != 60
+        or set(r["tau"] for r in primary) != {"1", "2"}
+    ):
         raise ValueError("Core export must contain 60 users at tau 1 and 2")
+    users = {r["user_id"] for r in primary}
+    if set(pairs) != {(user, tau) for user in users for tau in ["1", "2"]}:
+        raise ValueError("Every core user must have one row at each tau")
     expected = {(r["user_id"], r["tau"]): r for r in primary}
     if len(alias) != len(primary) or {(r["user_id"], r["tau"]) for r in alias} != set(expected):
         raise ValueError("Legacy summary and primary export observation sets differ")
@@ -64,7 +71,12 @@ def summarize(data_dir: Path) -> dict:
         raise ValueError("k-selection and core user sets differ")
     sensitivity = rows(data_dir / "sensitivity_12cell_matrix.csv")
     cells = {(r["A_bins"], r["S_mode"], r["H_bin_hours"]) for r in sensitivity}
-    if len(sensitivity) != 12 or len(cells) != 12:
+    if len(sensitivity) != 12 or cells != {
+        (a, mode, hour)
+        for a in ["3", "5", "7"]
+        for mode in ["binary", "quantile3"]
+        for hour in ["2", "4"]
+    }:
         raise ValueError("Sensitivity export must have 12 distinct cells")
     files = []
     for path in sorted(data_dir.rglob("*.csv")):
